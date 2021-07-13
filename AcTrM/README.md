@@ -1,3 +1,3 @@
-**Acquisition and Training Module (AcTrM)
+# Acquisition and Training Module (AcTrM)
 
-Acquisition and Training Module
+Module of iTACS designed to automate image acquisition and user self-training
