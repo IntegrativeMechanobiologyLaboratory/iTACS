@@ -1,0 +1,3058 @@
+// AcTrM functions
+
+import ij.ImagePlus;
+import ij.process.ImageProcessor;
+import ij.process.FHT;
+import ij.plugin.ImageCalculator;
+import java.awt.geom.Point2D;
+import java.awt.geom.AffineTransform;
+import ij.gui.NonBlockingGenericDialog;
+import ij.*;
+import ij.process.*;
+import org.micromanager.data;
+import ij.measure.ResultsTable;
+
+// for acquisiton of reference image set
+import org.micromanager.data.Pipeline;
+
+// for messages
+import org.micromanager.internal.utils.ReportingUtils;
+import org.micromanager.alerts.Alert;
+
+Font font1 = new Font("SansSerif", Font.BOLD, 14);
+Font font2 = new Font("SansSerif", Font.PLAIN, 14);
+Font font3 = new Font("SansSerif", Font.PLAIN, 44);
+
+/* --------------------------------------------------------------------------------
+* program to execute the directions provided through MDA interface 
+* and do it while saving the image as tiff and also de-drifting the stage
+* before running this script, make sure that the system is turned on
+* PROCEDURE TO TURN THE SYSTEM ON:
+* 1. Turn on DG-4 (Lamp - ON, ??? - ON)
+* 2. Turn on Proscan-II
+* 3. Turn on Hamamatsu ORCA
+* 4. Turn on the computer
+* 5. Start micromanager beta 2
+* 6. Load the AcTrM.cfg configuration file
+* 6. Click on the AcTrM.bsh Icon
+*
+* PROCEDURE TO ACQUIRE DATA:
+* 1. Follow the prompts on the screen
+* - The images at t=0 are stored in a directory 
+*---------------------------------------------------------------------------------*/
+
+//String ColumnComparatorDir = "C:/Users/IMBL_admin/Documents/MicroscopeFiles/microManager/AcTrM";
+
+
+/* --------------------------------------------------------------------------------
+* make a new directory 
+* Example: make_dir("C:/Users/IMBL_admin/Downloads", "test", true);
+* Apparently there is also an internal command for unique dirname
+* rootDir = acqSettings.root;
+* rootDirUnique = mm.data().getUniqueSaveDirectory(rootDir);
+* useGivenName - if true do not find a unique name
+*---------------------------------------------------------------------------------*/
+String make_dir(String rootDirName, String prefixName, boolean makeFlag, boolean useGivenName) {
+	// flag will decide whether to make a directory or simply suggest a unique name
+	File f = new File(rootDirName, prefixName);
+	String name = prefixName;
+	int i = 1;
+	
+	if(useGivenName){
+		f = new File(rootDirName, name);
+	} else {
+		// while(f.exists()) {
+		while(f.isDirectory()) {
+			name = prefixName + i;
+			f = new File(rootDirName, name);
+			i = i+1;
+		}
+	}
+	
+	if(i>1){
+		print("Updated the name of the root directory to:" + name);
+	}
+	
+	if(makeFlag){
+		String ret = f.getPath();
+		if ( f.mkdir() ) {
+			mm.scripter().message("Created " + ret);
+		}  else {
+			mm.scripter().message("Can't make directory " + ret);
+		}
+		return name;
+	} else {
+		return name;	
+	}
+};
+
+
+
+/* -------------------------------------------------------------------------------------
+* moves stage by an increment in x, y, and z, as opposed to move_stage which moves to an absolute position
+* posn = moveRelative3D(dx,dy,dz,xystage,zstage);
+* ---------------------------------------------------------------------------------- */
+double[] moveRelative3D(double dx, double dy, double dz, String xystage, String zstage) {
+	
+	double[] pos = new double[]{0.0, 0.0, 0.0};
+	
+	startPosX = mmc.getXPosition(xystage);
+	startPosY = mmc.getYPosition(xystage);
+	mmc.waitForDevice(xystage);
+	
+	mmc.setXYPosition(xystage,startPosX + dx, startPosY + dy);
+	mmc.waitForDevice(xystage);
+	
+	startPosZ = mmc.getPosition(zstage);
+	mmc.waitForDevice(zstage);
+	
+	mmc.setPosition(zstage,startPosZ + dz); // the position is set
+	mmc.waitForDevice(zstage);
+	
+	pos[0] = mmc.getXPosition(xystage);
+	pos[1] = mmc.getYPosition(xystage);
+	mmc.waitForDevice(xystage);
+	
+	pos[2]= mmc.getPosition(zstage);
+	mmc.waitForDevice(zstage);
+	
+	return pos;
+}
+
+
+
+
+/* --------------------------------------------------------------------------------
+* acquire image and save as tiff
+* Example: save_tiff_image(sp, "C:/Users/IMBL_admin/Downloads", "image-5.tif");
+*---------------------------------------------------------------------------------*/
+save_tiff_image(ShortProcessor sp, String dirPath, String fname, Alert currentState){
+	
+	import ij.process.*;
+	import ij.ImagePlus;
+	import ij.io.FileSaver;
+	// import mmcorej.CMMCore;
+	
+	if(dirPath.charAt(dirPath.length()-1) != "/")
+		dirPath = dirPath+"/";
+	
+	fPath = dirPath+fname;
+	
+	// if file name already exist declare error
+	File fChk = new File(dirPath, fname);
+	if(fChk.exists()){
+		mm.logs().showError("Trying to overwrite existing file "+fPath);
+	}
+	
+	ImagePlus imp = new ImagePlus(fPath, sp);
+	FileSaver fs = new FileSaver(imp);
+	fs.saveAsTiff(fPath);
+	// mm.scripter().message("saved ["+fname+"] at ["+dirPath+"]");
+	
+	// if file is not reated, declare error
+	if(fChk.exists()){
+		currentState.setText("Saved "+fPath);
+	} else {
+		mm.logs().showError("Unable to create "+fPath);
+	}
+}
+
+
+
+
+/* --------------------------------------------------------------------------------
+* acquire image and save as tiff
+* Example: a = grab_ImagePlus();
+*---------------------------------------------------------------------------------*/
+grab_ImagePlus(String name)
+{
+	import ij.process.*;
+	import ij.*;
+	import ij.plugin.*;
+	
+	// name="";
+	mmc.snapImage();
+	img = mmc.getImage(); 
+
+	ImageProcessor proc = ImageUtils.makeProcessor(mmc, img); 
+	// ImagePlus imgp0 = new ImagePlus("",proc0); 
+//iheight = mmc.getImageHeight();
+//	iwidth = mmc.getImageWidth();
+//	pixels = mmc.getImage();
+//	proc = new ShortProcessor(iwidth,iheight,pixels,null);
+	ImagePlus imp = (new ImagePlus(name,proc)).duplicate();
+	ImageConverter iconv = new ImageConverter(imp);
+	iconv.convertToGray32();
+	imp.updateImage();
+	
+	return imp;
+}
+
+
+
+/* --------------------------------------------------------------------------------
+* acquire image and save as tiff
+* Example: a = grab_ROI_ImagePlus(ixypos, name);
+*---------------------------------------------------------------------------------*/
+grab_ROI_ImagePlus(int ixypos, String name)
+{
+	import ij.process.*;
+	import ij.*;
+	import ij.plugin.*;
+	
+	mmc.snapImage();
+	img = mmc.getImage(); 
+
+	ImageProcessor proc = ImageUtils.makeProcessor(mmc, img); 
+	
+	//pixels = mmc.getImage();
+	//width = (int) mmc.getImageWidth();
+	//height = (int) mmc.getImageHeight();
+	
+	//proc = new ShortProcessor(width, height, pixels, null);
+	//proc.setPixels(pixels);
+	proc.setRoi(recoveryRegion[ixypos][0],recoveryRegion[ixypos][1],recoveryRegion[ixypos][2],recoveryRegion[ixypos][3]);
+	procOut = proc.crop();
+	// imp = new ImagePlus(name,procOut);
+	ImagePlus imp = (new ImagePlus(name,procOut)).duplicate();
+	ImageConverter iconv = new ImageConverter(imp);
+	iconv.convertToGray32();
+	imp.updateImage();
+	
+	return imp;
+	
+}
+
+
+
+
+
+/* ------------------------------------------------------------------------------
+* Calculate difference square mean of current and return the value
+* curDSM = get_DSM_corrCoeff(ixypos, imp0_norm, imp1, true);
+* --------------------------------------------------------------------------- */
+double get_DSM_corrCoeff(int ixypos, ImagePlus imp0_norm, ImagePlus imp1, boolean useCorrAlgoFlag) {
+	import ij.measure.Measurements;
+
+	double DSM = 0.0;
+	int measMeanStd = Measurements.MEAN + Measurements.STD_DEV;
+	// double n = (double) (imp0_norm.getHeight()*imp0_norm.getWidth());
+	
+	ImageCalculator ic = new ImageCalculator(); 
+	
+	// get 32-bit, normalized image plus
+	// imp1 = get_32bit_normalized_imageplus(proc1);
+	
+	
+	if(useCorrAlgoFlag){
+		// calculate image cross-correlation 
+		// https://en.wikipedia.org/wiki/Cross-correlation (zero normalized cross-correlation)
+		// http://www.cse.psu.edu/~rtc12/CSE486/lecture07.pdf
+		// ASSUMING THAT THE imageplus is 32-bit
+		
+		// get mean and standard deviation of the reference image
+		stats = imp0_norm.getStatistics(measMeanStd);
+		
+		refMean = (double) stats.mean;
+		refstdDev = (double) stats.stdDev;
+		
+		// subtract mean from the image
+		IJ.run(imp0_norm, "Subtract...", "value="+IJ.d2s(refMean));
+		
+		// get mean and standard deviation of the reference image
+		stats = imp1.getStatistics(measMeanStd);
+		iMean = (double) stats.mean;
+		istdDev = (double) stats.stdDev;
+		
+		// subtract mean from the image
+		IJ.run(imp1, "Subtract...", "value="+IJ.d2s(iMean));
+		
+		// calculate product of the two images
+		imMult = ic.run("Multiply create 32-bit", imp0_norm, imp1);
+		
+		// get sum of all pixels and normalize it to get normaized cross-correlation coefficient
+		stats = imMult.getStatistics(Measurements.MEAN);
+		double xCorrCoeff = (double) stats.mean; // number of pixel is already included in the mean 
+		double normXCorrCoeff = xCorrCoeff/(refstdDev*istdDev); // will range from 1 = perfect correlation to -1 = anticorrelated 
+		print("Xcorr coefff=  "+IJ.d2s(normXCorrCoeff,5));
+		DSM = 1.0 - normXCorrCoeff; // range from 0 (perfect correlation) to 2 (anticorrelated)
+	} else {
+		// calculate difference of image (note imagecalculator only works with imageplus and not with imageprocessor)
+		ImagePlus jimp = ic.run("Subtract create 32-bit", imp0_norm, imp1); 
+		
+		// calculate square 
+		ImagePlus jimp = ic.run("Multiply create 32-bit", jimp, jimp); 
+		
+		// calculate statistics
+		ImageStatistics jstat = jimp.getStatistics();
+		
+		// get mean
+		DSM = jstat.mean;
+	}
+	
+	// return mean
+	return DSM;
+}
+
+
+
+/* -----------------------------------------------------------------------------
+*  Function that does book keeping for the z optimization
+*  double[][] arr2 = build_DSMarray(optZ_array, currDSM, currZ);
+*--------------------------------------------------------------------------- */
+double[][] build_DSMarray(double[][] optZ_array, double currDSM, double currZ)
+{	
+ 	double lastDSM = optZ_array[0][(int) (optZ_array[2][0]-1.0)];
+ 	
+	// ensure only successive increases in DSM are counted in [2][2] and [2][3]
+	if(lastDSM<currDSM)
+	{
+		if(optZ_array[2][1]==1.0)
+		{
+			if(optZ_array[2][2]<=1.0)
+			{
+				optZ_array[2][2] = optZ_array[2][2] + 1.0;
+				optZ_array = insert_DSM(optZ_array, currDSM, currZ); // make sure that the [2][0] is also updated in this function
+				
+				if(optZ_array[2][2]==2.0)
+				{
+					// check if the opposite direction does not have continuous decreases in its wake
+					flipSign = check_rising_wake(optZ_array);
+					if(flipSign)
+					{
+						optZ_array[2][1] = -1.0;
+						optZ_array[2][0] = 1.0; // CAUTION check this
+					}
+					else
+					{
+						optZ_array[2][2] = 2.0;
+						optZ_array[2][3] = 2.0;
+					}
+				}
+			}
+		}
+		else if(optZ_array[2][1]==-1.0)
+		{		
+			if(optZ_array[2][3]<=1.0)
+			{
+				optZ_array[2][3] = optZ_array[2][3] + 1.0;
+				optZ_array = insert_DSM(optZ_array, currDSM, currZ); // make sure that the [2][0] is also updated in this function
+				
+				if(optZ_array[2][3]==2.0)
+				{
+					// check if the opposite direction does not have continuous decreases in its wake
+					flipSign = check_rising_wake(optZ_array);
+					if(flipSign)
+					{
+						optZ_array[2][1] = 1.0;
+						optZ_array[2][0] = 8.0; // CAUTION check this
+						if(optZ_array[0].length>optZ_array[2][4])
+						{
+							optZ_array[2][0] = optZ_array[2][4]; // CAUTION check this
+						}
+					}
+					else
+					{
+						optZ_array[2][2] = 2.0;
+						optZ_array[2][3] = 2.0;
+					}					
+				}
+			}
+		}
+	}
+	else // DSM is lowered
+	{
+		if(optZ_array[2][1]==1.0)
+		{
+			if(optZ_array[2][2]>0.0) // if there is a record of increase, then eliminate that record
+			{
+				optZ_array[2][2] = optZ_array[2][2] - 1.0;
+			}
+			optZ_array = insert_DSM(optZ_array, currDSM, currZ); // make sure that the [2][0] is also updated in this function
+		}
+		else if(optZ_array[2][1]==-1.0)
+		{		
+			if(optZ_array[2][3]>0.0) // if there is a record of increase, then eliminate that record
+			{
+				optZ_array[2][3] = optZ_array[2][3] - 1.0;
+			}
+			optZ_array = insert_DSM(optZ_array, currDSM, currZ); // make sure that the [2][0] is also updated in this function
+		}		
+	}
+	
+	return optZ_array;
+}
+
+
+
+
+/* -----------------------------------------------------------------
+*  function that checks if it is useful to move in other direction
+*  flipSign = check_rising_wake(optZ_array);
+* -------------------------------------------------------------- */
+boolean check_rising_wake(double[][] optZ_array)
+{
+	int jn = (int) optZ_array[2][4];
+	double[] jr = Arrays.copyOfRange(optZ_array[0], 0, jn);
+	boolean flipSign = true;
+	
+	if(optZ_array[2][1]==1.0) // stage was moving up
+	{
+		if((jr[0]>jr[1]) && (jr[1]>jr[2]))
+		{
+			flipSign = false;
+		}
+	}
+	else if(optZ_array[2][1]==-1) // stage was moving down
+	{
+		if((jr[jn-1]>jr[jn-2]) && (jr[jn-2]>jr[jn-3]))
+		{
+			flipSign = false;
+		}		
+	}
+	
+	return flipSign;
+}
+
+
+
+
+
+
+/* ---------------------------------------------------------------
+* function to insert currDSM and currZ in the optZ_array matrix and also update other relevant optZ_array[2] row
+* optZ_array = insert_DSM(optZ_array, currDSM, currZ);
+* ------------------------------------------------------------ */
+double[][] insert_DSM(double[][] optZ_array, double currDSM, double currZ)
+{
+	//this.interpreter.source(ColumnComparatorDir+"/ColumnComparator.java");
+	this.interpreter.source("../plugins/IMBL/ColumnComparator.java");
+	
+	int i = 0;
+	int j = 0;
+	
+	// define jn as (length of the measured DSMs) if they are less than 8, otherwise it is 8
+	int jn = 8;
+	if(optZ_array[0].length>optZ_array[2][4])
+	{
+		jn = (int) (optZ_array[2][4]+1.0);
+	}
+	
+	double[][] jr = new double[2][jn];
+	double[][] jr_out = optZ_array;
+	
+	jr[0] = Arrays.copyOfRange(optZ_array[0], 0, jn);
+	jr[1] = Arrays.copyOfRange(optZ_array[1], 0, jn);
+	
+	if(optZ_array[2][1]==1.0) // moving up, higher value z hence replace first row and then sort all array
+	{
+		if(optZ_array[0].length>optZ_array[2][4])
+		{
+			jr[0][jn-1] = currDSM;
+			jr[1][jn-1] = currZ;
+			jr_out[2][0] = jn*1.0; // last entry was the bottommost (highest z) value
+			jr_out[2][4] = jn*1.0;
+			// print(jr[0]);
+		}
+		else
+		{
+			jr[0][0] = currDSM;
+			jr[1][0] = currZ;
+			jr_out[2][0] = jn*1.0; // last entry was the bottommost (highest z) value
+		}
+	}
+	else
+	{
+		jr[0][jn-1] = currDSM;
+		jr[1][jn-1] = currZ;
+		jr_out[2][0] = 1.0; // last entry was the topmost (lowest z) value
+		jr_out[2][4] = jn*1.0; // will be either necessray or redundant (here we have avoided one if statement)
+	}
+	
+	// transpose matrix (transpose is needed as "Column"comparator is used as opposed to "Row"comparator)
+	double[][] jr1 = new double[jn][2];
+	for (i=0; i<jn; i++)
+	{
+		for (j=0; j<2; j++)
+		{
+			jr1[i][j] = jr[j][i];
+		}
+	}
+	
+	// sort using second column
+	Arrays.sort(jr1, new ColumnComparator(1));
+	
+	// print(jr1.length);
+	// print(jr_out.length);
+	
+	// transpose matrix (get back at the row format of storing data)
+	for (i=0; i<jn; i++)
+	{
+		for (j=0; j<2; j++)
+		{
+			jr_out[j][i] = jr1[i][j];
+		}
+		// print("i="+i+", jr1="+jr1[i][0]+", "+jr1[i][1]);
+	}
+	
+	return jr_out;
+}
+
+
+
+
+/* -------------------------------------------------------------------
+*  returns minimum value of DSM and corresponding optimum value of Z
+*  double[] minDSM_optZ = get_minDSM_optZ(optZ_array);
+*------------------------------------------------------------------ */
+double[] get_minDSM_optZ(double[][] optZ_array)
+{
+	import ij.IJ;
+	
+	int jn = (int) optZ_array[2][4];
+	// double[][] jr = new double[optZ_array[2][4]][2];
+	double[][] jr = new double[jn][2];
+	
+	// copy transpose optZ_array matrix (transpose is needed as "Column"comparator is used as opposed to "Row"comparator)
+	for (i=0; i<jn; i++)
+	{
+		for (j=0; j<2; j++)
+		{
+			jr[i][j] = optZ_array[j][i];
+		}
+	}
+	
+	// print("temp1, _optZ"+IJ.d2s(jr[0][0])+" "+IJ.d2s(jr[0][0]));
+	
+	// sort using first column (DSM)
+	Arrays.sort(jr, new ColumnComparator(0));
+	
+	// print("temp2, _optZ"+IJ.d2s(jr[0][0])+" "+IJ.d2s(jr[0][0]));
+	
+	double[] jr_out = new double[2];
+	jr_out[0] = jr[0][0]; // minDSM
+	jr_out[1] = jr[0][1]; // corresponding z
+	
+	// print("temp3, _optZ"+IJ.d2s(jr_out[0],5)+" "+IJ.d2s(jr_out[1],0));
+	
+	return jr_out;
+}
+
+
+
+Point2D.Double measureDispTurboReg(ImagePlus impRef, ImagePlus impCur, Double pixSz) {
+
+	import ij.IJ;
+	import ij.measure.ResultsTable;
+	import ij.ImagePlus;
+	import ij.gui.ImageWindow;
+	import ij.measure.Measurements;
+
+	// String dataDir = "C:/Users/IMBL_admin/Documents/MicroscopeFiles/microManager/AcTrM/translation_using_TurboReg/";
+	// show ref image, and name the windowtitle ref
+	// show current image, and name windowtitle cur
+
+	// print("ImageTypes: "+IJ.d2s(impRef.getType())+" == "+IJ.d2s(impCur.getType()));
+	
+	// subtract mean intensity from the image
+	ImageStatistics stats = impRef.getStatistics(Measurements.MEAN);
+	double refMean = (double) stats.mean;
+	ImageStatistics stats = impCur.getStatistics(Measurements.MEAN);
+	double curMean = (double) stats.mean;
+	
+	//IJ.run(impRef, "Subtract...", "value="+IJ.d2s(refMean));
+	//IJ.run(impCur, "Subtract...", "value="+IJ.d2s(curMean));
+	IJ.run(impCur, "Multiply...", "value="+IJ.d2s(refMean/curMean));
+	
+	impRef.setTitle("ref");
+	impRef.show();
+	ImageWindow refWin = impRef.getWindow(); // works when show() is called
+	refWin.setLocationAndSize(0, 0, 500, 500);
+	
+	impCur.setTitle("cur");
+	impCur.show();	
+	ImageWindow curWin = impCur.getWindow(); // works when show() is called
+	curWin.setLocationAndSize(500, 0, 500, 500);
+	
+	IJ.run("TurboReg ", "-align  -window cur 1 1 2048 2048 -window ref 1 1 2048 2048 -translation 2048 2048 2048 2048 -hideOutput");
+	
+	IJ.run("Close", "ref");
+	IJ.run("Close", "cur");
+	
+	rt = ResultsTable.getResultsTable();
+	
+	sourceX0 = rt.getValue("sourceX", 0);
+	sourceY0 = rt.getValue("sourceY", 0);
+	targetX0 = rt.getValue("targetX", 0);
+	targetY0 = rt.getValue("targetY", 0);
+	dx = (targetX0 - sourceX0); ///2;
+	dy = (targetY0 - sourceY0); ///2;
+	
+	// apply 90 degree rotation to displacements
+	// positive x = negative y
+	// positive y = positive x	
+	d = new Point2D.Double(dy*pixSz, -dx*pixSz);
+	// d = new Point2D.Double(-dx*pixSz, -dy*pixSz);
+
+	print("measureDispTurboReg: "+"dx="+IJ.d2s(-dy*pixSz,5)+", dy="+IJ.d2s(dx*pixSz,5));
+
+	return d;
+}
+
+
+/* ------------------------------------------------------------------------------
+* get sub image from a imageproc at location x and y of width w and height h
+* getSubImage(proc1, x, y, w, h);
+*  --------------------------------------------------------------------------- */
+ImageProcessor getSubImage(ImageProcessor proc, int x, int y, int w, int h) {
+	proc2 = new FloatProcessor(w,h);
+	proc2.insert(proc,-x,-y);
+	return proc2;
+}
+
+
+/* --------------------------------------------------------------------------------
+* Performs a 2D cross-correlation between two images
+*---------------------------------------------------------------------------------*/
+
+ImageProcessor theSlide = null; 
+ImageProcessor crossCorrelate(ImageProcessor proc1, ImageProcessor proc2) {
+	// import ij.process.FHT;
+	
+	h1 = new FHT(proc1);
+	h2 = new FHT(proc2);
+	h1.transform();
+	h2.transform();
+	result = h1.conjugateMultiply(h2);
+	result.inverseTransform();
+	result.swapQuadrants();
+	result.resetMinAndMax();
+	return result;
+}
+
+// Measures the displacement between two images by cross-correlating, and then finding the maximum value.
+// Accurate to one pixel only.
+
+
+Point2D.Double measureDispHighRes(ImageProcessor proc1, ImageProcessor proc2, Double pixSz, boolean display, String xcorrWinName) {
+	
+	import ij.IJ;
+	import ij.plugin.ContrastEnhancer;
+	
+	int scaleFactor = 100;
+	// to see if dimly lit images does better in xy matching
+	c = new ContrastEnhancer(); // this is how java class is used
+	c.setNormalize(true);
+	c.stretchHistogram(proc1, 0.5);
+	c.stretchHistogram(proc2, 0.5);
+	
+	result = crossCorrelate(proc1,proc2);
+	
+	resultCenter = getSubImage(result,result.getWidth()/2-16,result.getHeight()/2-16,32+1,32+1);
+	resultCenter.setInterpolationMethod(ImageProcessor.BICUBIC);
+	resultCenterScaled = resultCenter.resize(resultCenter.getWidth()*scaleFactor);
+	img = new ImagePlus("",resultCenterScaled);
+	
+	p = ImageUtils.findMaxPixel(img); // can do better with ij.plugin.filter.MaximumFinder 
+	dx = (Double) img.getWidth()/2. - (Double) p.x;
+	dy = (Double) img.getHeight()/2. - (Double) p.y;		
+	
+	dx = dx/((Double) scaleFactor);
+	dy = dy/((Double) scaleFactor);
+	
+	// apply 90 degree rotation to displacements
+	// positive x = negative y
+	// positive y = positive x	
+	d = new Point2D.Double(-dy*pixSz, dx*pixSz); // CAUTION
+	
+	if (display){
+		img.show();
+		IJ.run("Rename...", "title="+xcorrWinName);
+	}
+	
+	print("measureDispalcement_whole: maxlocn");
+	print("p="+IJ.d2s(p.x)+" : "+IJ.d2s(p.y)+", dx="+IJ.d2s(dx)+", dy="+IJ.d2s(dy));
+	
+	return d;
+}
+
+
+Point2D.Double measureDisplacement_whole(ImageProcessor proc1, ImageProcessor proc2, Double pixSz, boolean display, String xcorrWinName, boolean refinedFlag) {
+	
+	import ij.IJ;
+	import ij.plugin.ContrastEnhancer;
+	
+	int scaleFactor = 10;
+	// to see if dimly lit images does better in xy matching
+	c = new ContrastEnhancer(); // this is how java class is used
+	c.setNormalize(true);
+	c.stretchHistogram(proc1, 0.5);
+	c.stretchHistogram(proc2, 0.5);
+	
+	result = crossCorrelate(proc1,proc2);
+	
+	if(refinedFlag){
+		// resultCenter = getSubImage(result,result.getWidth()/2-32,result.getHeight()/2-32,64,64);
+		// resultCenter.setInterpolationMethod(ImageProcessor.BICUBIC);
+		// resultCenterScaled = resultCenter.resize(resultCenter.getWidth()*10);
+		// img = new ImagePlus("",resultCenterScaled);
+		print("meaureDisplacement: refined");
+		result.setInterpolationMethod(ImageProcessor.BICUBIC);
+		result = result.resize(result.getWidth()*scaleFactor);
+	}
+	
+	img = new ImagePlus("",result);
+	p = ImageUtils.findMaxPixel(img); // can do better with ij.plugin.filter.MaximumFinder 
+	dx = (Double) img.getWidth()/2. - (Double) p.x;
+	dy = (Double) img.getHeight()/2. - (Double) p.y;		
+	
+	if(refinedFlag){
+		print("meaureDisplacement: refined 1");
+		dx = dx/((Double) scaleFactor);
+		dy = dy/((Double) scaleFactor);		
+	}
+	
+	// apply 90 degree rotation to displacements
+	// positive x = negative y
+	// positive y = positive x
+	
+	
+	d = new Point2D.Double(-dy*pixSz, dx*pixSz); // CAUTION
+	
+	if (display){
+		img.show();
+		IJ.run("Rename...", "title="+xcorrWinName);
+	}
+	
+	print("measureDispalcement_whole: maxlocn");
+	print("p="+IJ.d2s(p.x)+" : "+IJ.d2s(p.y)+", dx="+IJ.d2s(dx)+", dy="+IJ.d2s(dy));
+	
+	return d;
+}
+
+
+
+/* ---------------------------------------------------------------
+* Function prompts user to provide startup type
+* int startIndx = define_startup_settings(startupOptions);
+* ------------------------------------------------------------ */
+int define_startup_settings(String[] startupOptions){
+	
+	import ij.gui.GenericDialog; // https://imagej.nih.gov/ij/developer/api/ij/gui/GenericDialog.html
+	
+	title = "AcTrM - Step 0: ";
+	
+	GenericDialog dlg = new GenericDialog(title, null);
+	dlg.setLocation(600, 0);
+	dlg.setAlwaysOnTop(true);
+	dlg.addMessage("Acquisition and Training Module of Monolayer Stress Microscopy\n", font1, Color.BLACK);
+	dlg.addMessage("Define the type of AcTrM session you plan to run:", font2, Color.BLACK);
+	dlg.addRadioButtonGroup("", startupOptions, 1, 2, startupOptions[0]);
+	
+	// dlg.centerDialog(true);
+	dlg.hideCancelButton();
+	dlg.showDialog();
+	String jttle = dlg.getNextString();
+	String jttle = dlg.getNextString();
+  	String startString = dlg.getNextRadioButton();
+  	int startIndx = 0;
+  	if(startString==startupOptions[1]){
+  		startIndx = 1;
+  	}
+  	
+/*	if (dlg.wasCanceled()){
+		mm.logs().showError("Must make proper selection in "+title);
+		return;
+	}*/
+	
+	mm.scripter().message("User selected: " + startupOptions[startIndx]);
+	
+	return startIndx;
+}
+
+
+
+
+/* ---------------------------------------------------------------
+* function to create positionlist
+* create_position_list();
+* ------------------------------------------------------------ */
+Boolean create_position_list(){
+	
+	// set to phase
+	// exposure to 40
+	// show the main window (put it in top right corner)
+	// show live view (put it in bottom left corner)
+	// show stage motion control window (put it in bottom right corner)
+	// turn on snap/live view
+	import ij.gui.NonBlockingGenericDialog;
+	Boolean respons;
+	
+	mm.showPositionList();
+	
+	NonBlockingGenericDialog dlgn = new NonBlockingGenericDialog("AcTrM - Step 1:");
+	dlgn.setLocation(600, 0);
+	dlgn.setAlwaysOnTop(true);
+	dlgn.addMessage("(a) If you do not already have the position list, create one as follows",font1,Color.BLACK);
+	dlgn.addMessage("    + Go to the desired location",font2,Color.BLACK);
+	dlgn.addMessage("    + Focus on the top most layer of fluorescent beads",font2,Color.BLACK);
+	dlgn.addMessage("    + Click on 'Mark' button (click on the header 'Current' to change 'Replace' button to 'Mark')",font2,Color.BLACK);
+	dlgn.addMessage("    + Repeat above steps to record all desired locations in the Stage Position List ",font2,Color.BLACK);
+	dlgn.addMessage("(a) But if you already have the position list, then 'Load' the latest 'PosList.pos'",font1,Color.BLACK);
+	dlgn.addMessage("(b) Close the Stage Position List window and Click OK",font1,Color.BLACK);
+	dlgn.addMessage("",font2,Color.BLACK);
+	dlgn.addMessage("NOTE: Without the extra ring, the 10X objective will find best focus at ~6mm from bottom",font2,Color.BLACK);
+	dlgn.hideCancelButton();
+	dlgn.showDialog();
+	
+	if(dlgn.wasOKed()){
+		respons = true;
+	}
+	
+	return respons;
+}
+
+
+
+/* ---------------------------------------------------------------
+* function to define MDA settings
+* define_MDA_settings();
+* ------------------------------------------------------------ */
+define_MDA_settings(){
+	
+	mm.openAcqControlDialog();
+	doThisNClickOK("AcTrM - Step 2: ", "(a) Define Time Points (keep the number larger than you need), \n(b) Define Channels, "+
+		"\n(c) Define Save Images settings, \n(d) Define Acquisition Order, "+
+		"\n(e) Close Multi-Dimensional Acquisition and Click OK");
+}
+
+
+
+
+/* ---------------------------------------------------------------
+* Function prompts user to declare if the recovery is needed
+* recoveryInput(iChannel, txtPath)
+* ------------------------------------------------------------ */
+recoveryInput(String[] iChannel, String txtPath){
+	
+	import ij.gui.GenericDialog;
+	
+	title = "AcTrM - Step 3: ";
+	GenericDialog dlg = new GenericDialog(title, null);
+	dlg.setLocation(600, 0);
+	dlg.setAlwaysOnTop(true);
+	dlg.addMessage("Does the experiment need recovery of XYZ?");
+	//dlg.enableYesNoCancel();
+	//dlg.hideCancelButton();
+	dlg.setOKLabel("Yes");
+	dlg.setCancelLabel("No");
+	dlg.addMessage("NOTE: Micromanager driver for H117 limits the accuracy of XY recovery to 1 um");
+	dlg.showDialog();
+
+	if(dlg.wasOKed()){
+		define_roiRoughRefined_settings(iChannel, txtPath);
+	} else { // no need of recovery
+		for(i=0; i<nPositions; i++){
+			recoveryFlags[i][0] = 0;
+			recoveryFlags[i][1] = 0;
+			recoveryRegion[i][0] = 0;
+			recoveryRegion[i][1] = 0;
+			recoveryRegion[i][2] = 2048;
+			recoveryRegion[i][3] = 2048;
+			recoveryChannel[i][0] = 0;
+			recoveryChannel[i][1] = 0;
+		}
+		save_rrr(txtPath, false);
+	}
+}
+
+
+/* ---------------------------------------------------------------
+* Function prompts user to ROI, rough recovery, refined recovery options 
+* define_roiRoughRefined_settings(iChannel, txtPath);
+* ------------------------------------------------------------ */
+define_roiRoughRefined_settings(String[] iChannel, String txtPath){
+	
+	import ij.gui.GenericDialog; // https://imagej.nih.gov/ij/developer/api/ij/gui/GenericDialog.html
+	import ij.IJ;
+	
+	// rrrChoiceIndx[0][0] = 0 ... no recovery
+	// rrrChoiceIndx[0][0] = 1 ... only rough recovery
+	// rrrChoiceIndx[0][0] = 2 ... both rough and refined recovery
+	// rrrChoiceIndx[0][1] = 0 ... whole field for refined recovery
+	// rrrChoiceIndx[0][1] = 1 ... select field for refined recovery
+	// rrrChoiceIndx[1][0] = channel index for rough recovery
+	// rrrChoiceIndx[1][1] = channel index for refined recovery ... if recovering both rough and refined
+	
+    // int[] outPt = new int[3];
+	int[][] rrrChoiceIndx = new int[2][2];
+	
+	title = "AcTrM - XYZ recovery options: ";
+	
+	GenericDialog dlg = new GenericDialog(title, null);
+	dlg.setLocation(600, 0);
+	dlg.setAlwaysOnTop(true);
+	// dlg.addMessage("Rough recovery (done with a full field-of-view): ", font1, Color.BLACK);
+	dlg.addRadioButtonGroup("Channel for rough recovery: ", iChannel, 1, iChannel.length, iChannel[0]);
+	// dlg.addMessage("");
+	dlg.addMessage("");
+	// dlg.addMessage("Refined recovery: ", font1, Color.BLACK);
+	dlg.addCheckbox("- Perform refined recovery", true);
+	dlg.addCheckbox("- Uses limited field-of-view for refined recovery", false);
+	dlg.addRadioButtonGroup("Channel for refined recovery: ", iChannel, 1, iChannel.length, iChannel[0]);
+	dlg.addMessage("");
+	// dlg.addMessage("");
+	// dlg.addMessage("Common options: ", font1, Color.BLACK);
+	dlg.addCheckbox("- start the focus search by raising the objective", true);
+	//dlg.addCheckbox("- show 'live' drift correction (may slowdown image acquisition)", false);
+	//dlg.addCheckbox("- show cross-correlation map (may slowdown image acquisition)", false);
+	dlg.hideCancelButton();
+	dlg.showDialog();
+	
+	rrrChoiceIndx[0][0] = 1;
+	
+	// jmsg = dlg.getMessage();
+	String jchan = dlg.getNextRadioButton();
+	jmsg = dlg.getMessage();
+	// jmsg = dlg.getMessage();
+	// jmsg = dlg.getMessage();
+	for(int i=0; i<iChannel.length; i++){
+		if(jchan==iChannel[i]){
+			rrrChoiceIndx[1][0] = i;
+			break;
+		}
+	}
+	// print("temp: "+jchan+IJ.d2s(rrrChoiceIndx[1][0]));
+	
+	Boolean jrec1 = dlg.getNextBoolean();
+	if(jrec1){
+		rrrChoiceIndx[0][0] = 2;
+	}
+	
+	jrec1 = dlg.getNextBoolean();
+	rrrChoiceIndx[0][1] = 0;
+	if(jrec1){
+		rrrChoiceIndx[0][1] = 1;
+	}
+	
+	String jchan = dlg.getNextRadioButton();
+	for(int i=0; i<iChannel.length; i++){
+		if(jchan==iChannel[i]){
+			rrrChoiceIndx[1][1] = i;
+			break;
+		}
+	}
+	// print("temp: "+jchan+IJ.d2s(rrrChoiceIndx[1][1]));
+	
+	jmsg = dlg.getMessage();
+	// jmsg = dlg.getMessage();
+	// jmsg = dlg.getMessage();
+	Boolean jzste = dlg.getNextBoolean();
+	//Boolean jlive = dlg.getNextBoolean();
+	Boolean jlive = false;
+	//Boolean jxmap = dlg.getNextBoolean();
+	Boolean jxmap = false;
+	
+	//recoveryFlags_other[0] = 0;
+	//recoveryFlags_other[1] = 0;
+	//recoveryFlags_other[2] = 0;
+	if(jzste){
+	recoveryFlags_other[0] = 1;}
+	
+	if(jlive){
+	recoveryFlags_other[1] = 1;}
+	
+	if(jxmap){
+	recoveryFlags_other[2] = 1;}
+	
+	
+	if (dlg.wasCanceled()){
+		mm.logs().showError("Must make proper selection in "+title);
+		return;
+	}
+	
+	// mm.scripter().message("You selected: " + roiType[outPt[0]] + " for ROI type, " + iChannel[outPt[1]] + " for rough recovery, and " + iChannel[outPt[2]] + " for refined recovery");
+	
+	for(int i=0; i<nPositions; i++){
+		recoveryFlags[i][0] = rrrChoiceIndx[0][0]; // no / rough / refined
+		recoveryFlags[i][1] = rrrChoiceIndx[0][1]; // wholefield / selectfield
+		
+		recoveryRegion[i][0] = 0; // default x
+		recoveryRegion[i][1] = 0; // default y
+		if(rrrChoiceIndx[0][1]==1){ // finite field, will be set during T0 image collection
+			recoveryRegion[i][2] = 0; // default w
+			recoveryRegion[i][3] = 0; // default h
+		} else { // wholefield
+			recoveryRegion[i][2] = 2048; // default w
+			recoveryRegion[i][3] = 2048; // default h
+		}
+	}
+	
+	if(rrrChoiceIndx[0][0]!=0){ // fill recoveryChannel[i][0]
+		for(int i=0; i<nPositions; i++){
+			recoveryChannel[i][0] = rrrChoiceIndx[1][0];
+		}
+	}
+	
+	if(rrrChoiceIndx[0][0]==2){ // fill recoveryChannel[i][1]
+		for(int i=0; i<nPositions; i++){
+			recoveryChannel[i][1] = rrrChoiceIndx[1][1];
+		}
+	}
+	
+	// save the recovery options
+	save_rrr(txtPath, false);
+}
+
+
+
+String[] get_hardware_props(){
+	
+	import org.micromanager.internal.MMStudio;
+	import org.micromanager.data;
+	import org.micromanager.PositionList;
+	import org.micromanager.StagePosition;
+	import org.micromanager.MultiStagePosition;
+	import org.micromanager.PositionListManager;
+	
+	String xyhardware;
+	String zhardware;
+	
+	xyhardware = mmc.getXYStageDevice();
+	mmc.waitForDevice(xyhardware);
+	
+	zhardware = mmc.getFocusDevice();
+	mmc.waitForDevice(zhardware); // wait until you get the name of the z 
+	
+	String[] otherProps = get_other_props();
+	
+	String[] xyzhardware = {xyhardware, zhardware, otherProps[0], otherProps[1], otherProps[2], otherProps[3], otherProps[4]};
+	
+	return xyzhardware;
+};
+
+
+
+/* ---------------------------------------------------------------
+* Function prompts user to provide other properties of the system
+* String[] otherProps = get_other_props();
+* ------------------------------------------------------------ */
+String[] get_other_props(){
+	
+	import ij.gui.GenericDialog; // https://imagej.nih.gov/ij/developer/api/ij/gui/GenericDialog.html
+	
+	title = "Define acquisition properties: ";
+	
+	GenericDialog dlg = new GenericDialog(title, null);
+	dlg.setLocation(600, 0);
+	dlg.setAlwaysOnTop(true);
+	//dlg.addNumericField("Pixel size (um): ", 0.6507028, 7);
+	String[] objString = {"10X", "20X"};
+	dlg.addRadioButtonGroup("Objective: ", objString, 1, objString.length, objString[1]);
+	dlg.addNumericField("XY position tolerance (um): ", 0.5, 2);
+	dlg.addNumericField("Focus step size, rough recovery (um): ", 2, 0);
+	dlg.addNumericField("Focus step size, fine recovery (um): ", 0.2, 1);
+	dlg.addNumericField("Acceptable value of image correlation coefficient: ", 0.01, 3);
+	// dlg.centerDialog(true);
+	dlg.hideCancelButton();
+	dlg.showDialog();
+	//if (dlg.wasCanceled()){
+	//	mm.logs().showError("Must make proper selection in "+title);
+	//	return;
+	//}
+	
+	//String pxSiz = IJ.d2s(dlg.getNextNumber(),7);
+	String js = dlg.getNextRadioButton();
+	pxSiz = IJ.d2s(0.32531,5); // default choice is 20X
+	if(js=="10X"){
+		pxSiz = IJ.d2s(0.65062,5);
+	}
+	String xytol = IJ.d2s(dlg.getNextNumber(),2);
+	String zstp1 = IJ.d2s(dlg.getNextNumber(),0);
+	String zstp2 = IJ.d2s(dlg.getNextNumber(),1);
+	String acorc = IJ.d2s(dlg.getNextNumber(),3);
+	
+	String[] otherProps = { pxSiz, xytol, zstp1, zstp2, acorc };
+	
+	return otherProps;
+}
+
+
+
+
+
+/* --------------------------------------------------------------------------------
+* show a dialog that waits for user input to run further
+* https://raw.githubusercontent.com/zindy/micromanager-upstream/master/scripts/sequentialAcq.bsh
+* USAGE: doThisNClickOK("Buckle up!", "Your chair will fly in 0.001ms");
+*---------------------------------------------------------------------------------*/
+doThisNClickOK(String ttle, String msg){
+	
+	import ij.gui.WaitForUserDialog;
+	
+	WaitForUserDialog dlg = new WaitForUserDialog(ttle, msg); 
+	dlg.setLocation(600, 0);
+	dlg.setAlwaysOnTop(true);
+	// dlg.hideCancelButton();
+	dlg.show();
+}
+
+
+
+
+/* --------------------------------------------------------------------------------
+* Check if the directory name ends with "/" if not add it
+* USAGE: dirname = switchSlash_and_endWithOne(dirname);
+* -------------------------------------------------------------------------------- */
+String switchSlash_and_endWithOne(String dirname){
+	
+	char[] dirChars = dirname.toCharArray();
+	
+	for(int i=0; i<dirname.length(); i++){
+		if(dirChars[i] == '\\'){
+			dirChars[i] = '/';
+		}
+	}
+	
+	dirname = String.valueOf(dirChars);
+	
+	if(dirChars[dirname.length()-1] != '/') {
+		dirname = dirname+"/";
+	}
+	
+	return dirname;
+}
+
+
+
+
+/* ---------------------------------------------------------------------------------
+* reposition the stage to same xy as the original image
+* recover_xy(imp0_norm, xyDevice, zDevice, pixSz, displayFlag, true, ixypos);
+* ------------------------------------------------------------------------------ */
+recover_xy(ImagePlus imp0_norm, Double pixSz, boolean showDriftOverlapped, boolean showXCorrMap, double xyTolerance, boolean refinedFlag, int ixypos, Alert currentState){
+	
+	import org.micromanager.display.DisplayManager;
+	import ij.IJ;
+	import ij.ImagePlus;
+	
+	String windowName = "Error Visual";
+	String xcorrWinName = "xcoor visual";
+	boolean keepMoving = true;
+	int count = 0;	
+	
+	/* // following lines to get the image plus and show it
+	ImageProcessor refProc = mm.data().ij().createProcessor(refImg);
+	refProc.resetRoi();
+	ImagePlus refImgPlus = (new ImagePlus("ref", refProc)).duplicate();   
+	ImageConverter iconv = new ImageConverter(refImgPlus);
+	iconv.convertToGray32();
+	refImgPlus.updateImage();
+	refImgPlus.show();
+	*/
+	
+	ImagePlus impxy1 = grab_ImagePlus("cur");
+	if(refinedFlag){
+		impxy1 = grab_ROI_ImagePlus(ixypos, "cur");
+	}
+	
+	if(showDriftOverlapped){
+		ImagePlus impDup0 = imp0_norm.duplicate();
+		ImagePlus impDup1 = impxy1.duplicate();
+		show_overlapped_IP(impDup0, impDup1, windowName);
+	}
+	
+	int nsteps = 0;
+	while (keepMoving)
+	{
+		nsteps ++;
+		// get the imageProc
+		if(refinedFlag){
+			impxy1 = grab_ROI_ImagePlus(ixypos, "cur");
+		} else {
+			impxy1 = grab_ImagePlus("cur");
+		}
+		
+		// compute the dispalcement vector between orignal and current iamges
+		//pixelDelta = measureDisplacement_whole(proc0, procxy1, pixSz, showXCorrMap, xcorrWinName, refinedFlag);
+		ImagePlus imp0Dup = imp0_norm.duplicate();
+		ImagePlus imp1Dup = impxy1.duplicate();
+		//ImagePlus tmp0Dup = imp0_norm.duplicate(); // this is for quick check
+		//ImagePlus tmp1Dup = impxy1.duplicate(); // this is for quick check
+		//ImageProcessor proc0 = tmp0Dup.getProcessor(); // this is for quick check
+		//ImageProcessor procxy1 = tmp1Dup.getProcessor(); // this is for quick check
+		//pixelDelta0 = measureDispHighRes(proc0, procxy1, pixSz, showXCorrMap, xcorrWinName); // this is for quick check
+		pixelDelta = measureDispTurboReg(imp0Dup, imp1Dup, pixSz);
+		// print("old method:new method "+pixelDelta0.x+":"+pixelDelta.x+"  "+pixelDelta0.y+":"+pixelDelta.y);
+
+		/*
+		// INCREASING THE VALUE OF MOTION TO GET IT OUT OF LEAST MOTION POSSIBLE BY THE MOTOR, HOPE IS THAT THE STAGE WILL GET IN THE REGION OF ERROR LESS THAN 0.2
+		if(Math.abs((double) pixelDelta.y)<0.5 && Math.abs((double) pixelDelta.y)>xyTolerance){
+		pixelDelta.y = (pixelDelta.y/Math.abs((double) pixelDelta.y)) * (Math.abs((double) pixelDelta.y) + 1);
+		}
+		
+		if(Math.abs((double) pixelDelta.x)<0.5 && Math.abs((double) pixelDelta.x)>xyTolerance){
+		pixelDelta.x = (pixelDelta.x/Math.abs((double) pixelDelta.x)) * (Math.abs((double) pixelDelta.x) + 1);
+		}
+		*/
+		
+		// move the stage by computed displacement vector
+		currPos = moveRelative3D((double) -pixelDelta.x, (double) -pixelDelta.y, (double)0.0, xyDevice, zDevice);
+		
+		// print("recover_xy moved to: "+currPos[0]+", "+currPos[1]+", "+currPos[2]);
+		
+		// apply negative displacement to 
+		count = count+1;
+		
+		if(Math.abs((double) pixelDelta.y)<xyTolerance && Math.abs((double) pixelDelta.x)<xyTolerance){
+			keepMoving=false;
+			// print("Mean Square Diff = " + a + ": meanVal i0 =" + meanVal);
+			//print("tempa"+IJ.d2s(pixelDelta.x)+"  "+IJ.d2s(pixelDelta.y));
+			//print("tempb"+IJ.d2s((double) pixelDelta.x)+"  "+IJ.d2s((double) pixelDelta.y));
+			xyDrift_zCorrCoeff[ixypos][0] = (double) pixelDelta.x;
+			xyDrift_zCorrCoeff[ixypos][1] = (double) pixelDelta.y;
+			if(showDriftOverlapped){
+				ImagePlus imp0Dup = imp0_norm.duplicate();
+				ImagePlus imp1Dup = impxy1.duplicate();
+				IJ.run("Close", windowName);
+				show_overlapped_IP(imp0Dup, imp1Dup, windowName);
+			}
+		}
+		// print("Step num =" + count + ", Pixels: " + pixelDelta.x + "   " + pixelDelta.y);
+		
+		if(showXCorrMap){
+			IJ.run("Close", xcorrWinName);
+		}
+		if(refinedFlag){
+			// currentState.setText("Recovering refined XY, attempt #"+IJ.d2s(nsteps,0));
+			currentState.setText("Recovering refined XY, Shift = "+IJ.d2s(Math.sqrt(pixelDelta.x*pixelDelta.x+pixelDelta.y*pixelDelta.y),5));
+		} else {
+			// currentState.setText("Recovering rough XY, attempt #"+IJ.d2s(nsteps,0));
+			currentState.setText("Recovering rough XY, Shift = "+IJ.d2s(Math.sqrt(pixelDelta.x*pixelDelta.x+pixelDelta.y*pixelDelta.y),5));
+		}
+	}
+	
+	if(showDriftOverlapped){
+		IJ.run("Close", windowName);
+	}
+	
+}
+
+
+
+
+
+
+/* -----------------------------------------------------------------------------------
+*  function guides the microscope to refocus based on previously stored image
+*  Example: recover_z(refImgPlus, starting_zsearch_dir, startZPos, zTolerance_1, false, true, ixypos, acceptableCorrCoeff, currentState);
+* -------------------------------------------------------------------------------- */
+recover_z(ImagePlus imp0_norm, String starting_zsearch_dir, double startZPos, double dz_stepSize, boolean refinedFlag, boolean useCorrAlgoFlag, int ixypos, double acceptableCorrCoeff, Alert currentState)
+{
+ 	import ij.IJ;
+	import java.util.*;
+	import java.util.Arrays.sort;
+	import ij.process.ImageStatistics;
+	import ij.ImagePlus;
+	
+	// 1. go in one direction (e.g., up)
+	// 2. keep going until you get two successive increases in DSM
+	// 3. after that change direciton starting with the other end (z-end) and go in opposite direction
+	// 4. keep going until you get two successive increases in DSM
+	// 5. once that happens, minima is reached.
+	
+	
+	//  select a direction to move, and keep moving until you hit two increases
+	
+	// optZ_array[2][0] = z position from which next up or down step needs to be taken (index of the optZ_array array)
+	// optZ_array[2][1] = current direction of motion, 1=up, -1=down
+	// optZ_array[2][2] = successive increases were encountered going up
+	// optZ_array[2][3] = successive increases were encountered going down
+	// optZ_array[2][4] = number of DSM values stored CAUTION - make sure that you replace all optZ_array[0].length with optZ_array[2][4] this variable will make the optZ_array a pseudo-dynamic array
+	
+	double zMotion = 0.0;
+	double dirBefore = 0.0;
+	double dirAFter = 0.0;
+	double currDSM; 
+	
+	// initialize optZ_array as all zeros
+	double[][] optZ_array = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+		{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+	{0, 0, 0, 0, 0}};
+	double[] minDSM_optZ = new double[2];
+	
+	Boolean keepFocusing = true;
+	
+	ImagePlus impz1 = grab_ImagePlus("cur");
+	if(refinedFlag){
+		impz1 = grab_ROI_ImagePlus(ixypos,"cur");
+	}
+	
+	ImagePlus imp0Dup = imp0_norm.duplicate();
+	ImagePlus imp1Dup = impz1.duplicate();
+	optZ_array[0][0] = get_DSM_corrCoeff(ixypos, imp0Dup, imp1Dup, useCorrAlgoFlag);
+	if(optZ_array[0][0] < acceptableCorrCoeff){ // redundant Dec 20, 2018
+		minDSM_optZ[0] = optZ_array[0][0];  // redundant Dec 20, 2018
+		minDSM_optZ[1] = startZPos; // redundant Dec 20, 2018
+		xyDrift_zCorrCoeff[ixypos][2] = minDSM_optZ[0]; // redundant Dec 20, 2018
+	} else {
+		optZ_array[1][0] = startZPos;
+		optZ_array[2][0] = 1.0; // only one entry
+		optZ_array[2][4] = 1.0;
+		if(starting_zsearch_dir=="up")
+		{
+			optZ_array[2][1] = 1.0;
+		}
+		else
+		{
+			optZ_array[2][1] = -1.0;
+		}
+		
+		/*
+		print("\nBefore:  "+nsteps);
+		print(optZ_array[0][0]+", "+optZ_array[0][1]+", "+optZ_array[0][2]+", "+optZ_array[0][3]+", "+optZ_array[0][4]+", "+optZ_array[0][5]+", "+optZ_array[0][6]+", "+optZ_array[0][7]);
+		print(optZ_array[1][0]+", "+optZ_array[1][1]+", "+optZ_array[1][2]+", "+optZ_array[1][3]+", "+optZ_array[1][4]+", "+optZ_array[1][5]+", "+optZ_array[1][6]+", "+optZ_array[1][7]);
+		print(optZ_array[2][0]+", "+optZ_array[2][1]+", "+optZ_array[2][2]+", "+optZ_array[2][3]+", "+optZ_array[2][4]);
+		*/
+		
+		// print("\nStep #0, XPos=" + startPos[0] + ", YPos=" + startPos[1] + ", ZPos=" + startPos[2] + ", DSM=" + optZ_array[0][0]);
+		print("\nStep #0, ZPos=" + startZPos + ", DSM=" + optZ_array[0][0]);
+		double[] minDSM_optZ = new double[2];
+		
+		nsteps = 0; // test driver variable, delete after testing
+		zMotion = dz_stepSize*optZ_array[2][1];
+		while(keepFocusing)
+		{
+			nsteps ++;
+			
+			// move the stage in one direction	
+			currPos = moveRelative3D((double)0.0, (double)0.0, zMotion, xyDevice, zDevice);
+			
+			if(refinedFlag){
+				impz1 = grab_ROI_ImagePlus(ixypos,"cur"); // grab image processor
+			} else {
+				impz1 = grab_ImagePlus("cur"); // grab image processor
+			}
+			
+			ImagePlus imp0Dup = imp0_norm.duplicate();
+			ImagePlus imp1Dup = impz1.duplicate();
+			currDSM = get_DSM_corrCoeff(ixypos, imp0Dup, imp1Dup, useCorrAlgoFlag); // compute DSM
+			
+			dirBefore = optZ_array[2][1];
+			optZ_array = build_DSMarray(optZ_array, currDSM, currPos[2]);
+			dirAfter = optZ_array[2][1];
+			
+			if(dirBefore==dirAfter)
+			{
+				zMotion = dirAfter*dz_stepSize;
+			}
+			else
+			{
+				zMotion = (optZ_array[1][(int) (optZ_array[2][0]-1.0)] - currPos[2]) + dirAfter*dz_stepSize;
+			}
+			/*
+			print("\nAfter:  "+nsteps);
+			print(optZ_array[0][0]+", "+optZ_array[0][1]+", "+optZ_array[0][2]+", "+optZ_array[0][3]+", "+optZ_array[0][4]+", "+optZ_array[0][5]+", "+optZ_array[0][6]+", "+optZ_array[0][7]);
+			print(optZ_array[1][0]+", "+optZ_array[1][1]+", "+optZ_array[1][2]+", "+optZ_array[1][3]+", "+optZ_array[1][4]+", "+optZ_array[1][5]+", "+optZ_array[1][6]+", "+optZ_array[1][7]);
+			print(optZ_array[2][0]+", "+optZ_array[2][1]+", "+optZ_array[2][2]+", "+optZ_array[2][3]+", "+optZ_array[2][4]);
+			*/		
+			if((optZ_array[2][2]==2) && (optZ_array[2][3]==2)) // come out of the loop as two incre reached on both sides
+			{
+				minDSM_optZ = get_minDSM_optZ(optZ_array); // minima is bagged
+				// print("temp ... minDSM = " + minDSM_optZ[0] + "; optZ = " + minDSM_optZ[1]);
+				keepFocusing = false;
+				
+				// get to the position that is found to be optimized
+				zMotion = (minDSM_optZ[1] - currPos[2]);
+				currPos = moveRelative3D((double)0.0, (double)0.0, zMotion, xyDevice, zDevice);
+			}
+			// keepFocusing = false;
+			print("Step #" + nsteps + ", XPos=" + currPos[0] + ", YPos=" + currPos[1] + ", ZPos=" + currPos[2] + ", DSM=" + currDSM);
+			if(refinedFlag){
+				//currentState.setText("Recovering refined Z, attempt #"+IJ.d2s(nsteps,0));
+				if(nsteps==1){
+					currentState.setText("Recovering refined Z, Matching ...%");
+				} else {
+					currentState.setText("Recovering refined Z, Matching "+IJ.d2s((1.0-minDSM_optZ[0])*100.0,0)+"%");
+				}
+			} else {
+				//currentState.setText("Recovering rough Z, attempt #"+IJ.d2s(nsteps,0));
+				if(nsteps==1){
+					currentState.setText("Recovering rough Z, Matching ...%");
+				} else {
+					currentState.setText("Recovering rough Z, Matching "+IJ.d2s((1.0-minDSM_optZ[0])*100.0,0)+"%");
+				}
+			}
+		}
+		print("minDSM = " + minDSM_optZ[0] + "; optZ = " + minDSM_optZ[1]);
+		xyDrift_zCorrCoeff[ixypos][2] = minDSM_optZ[0];
+	}
+}
+
+
+
+/* -----------------------------------------------------------------------------------
+*  function checks if the stage is in perfect position
+*  Example: Boolean makeAdjustmentsFlag = isPositionPerfect(imp0_norm, proc0, pixSz, refinedFlag, useCorrAlgoFlag, showXCorrMap, ixypos, acceptableCorrCoeff, currentState);
+* -------------------------------------------------------------------------------- */
+boolean isPositionPerfect(ImagePlus imp0_norm, ShortProcessor proc0, Double pixSz, boolean refinedFlag, boolean useCorrAlgoFlag, boolean showXCorrMap, int ixypos, double acceptableCorrCoeff, Alert currentState)
+{
+ 	import ij.IJ;
+	import java.util.*;
+	import java.util.Arrays.sort;
+	import ij.process.ImageStatistics;
+	import ij.ImagePlus;
+	
+	boolean makeAdjustmentsFlag = true;
+	
+	String xcorrWinName = "xcoor visual";
+	
+	ImagePlus impz1 = grab_ImagePlus("cur");
+	if(refinedFlag){
+		impz1 = grab_ROI_ImagePlus(ixypos,"cur");
+	}
+	
+	ImagePlus imp0Tmp = imp0_norm.duplicate();
+	ImagePlus imp1Tmp = impz1.duplicate();
+	
+	double minDSM = get_DSM_corrCoeff(ixypos, imp0Tmp, imp1Tmp, useCorrAlgoFlag);
+	if(minDSM < acceptableCorrCoeff){
+		makeAdjustmentsFlag = false;
+		
+		xyDrift_zCorrCoeff[ixypos][2] = minDSM;
+		
+		ImagePlus imp0Tmp = imp0_norm.duplicate();
+		ImagePlus imp1Tmp = impz1.duplicate();
+		//ImagePlus tmp0Tmp = imp0_norm.duplicate(); // this is for a quick check
+		//ImagePlus tmp1Tmp = impz1.duplicate(); // this is for a quick check
+		//ImageProcessor proc0 = tmp0Tmp.getProcessor(); // this is for a quick check
+		//ImageProcessor procz1 = tmp1Tmp.getProcessor(); // this is for a quick check
+		
+		// compute the dispalcement vector between orignal and current iamges
+		// pixelDelta0 = measureDispHighRes(proc0, procz1, pixSz, showXCorrMap, xcorrWinName); // this is for a quick check
+		pixelDelta = measureDispTurboReg(imp0Tmp, imp1Tmp, pixSz);
+		xyDrift_zCorrCoeff[ixypos][0] = (double) pixelDelta.x;
+		xyDrift_zCorrCoeff[ixypos][1] = (double) pixelDelta.y;
+		// print("old method:new method "+pixelDelta0.x+":"+pixelDelta.x+"  "+pixelDelta0.y+":"+pixelDelta.y);
+		print("No need to adjust XYZ for position #"+IJ.d2s(ixypos,0));
+		currentState.setText("No need to adjust XYZ for position #"+IJ.d2s(ixypos,0));
+	}
+	
+	return makeAdjustmentsFlag;
+}
+
+
+
+/* ---------------------------------------------------------------------------------------------
+*  Show overlapped view of the images from the ImagePlus
+*  show_overlapped_IP(proc0, proc1);
+* ---------------------------------------------------------------------------------------------*/
+show_overlapped_IP(ImagePlus imp0, ImagePlus imp1, String windowName){
+	
+	import ij.IJ;
+	
+	print("imp0 width="+IJ.d2s(imp0.getWidth())+", imp0 height="+IJ.d2s(imp0.getHeight()));
+	print("imp1 width="+IJ.d2s(imp1.getWidth())+", imp1 height="+IJ.d2s(imp1.getHeight()));
+	
+	boolean showIndividual = false; // done for debugging
+	if(showIndividual){
+		imp0.show();
+		IJ.run("Rename...", "title="+windowName);
+		imp1.show();
+		IJ.run("Rename...", "title="+windowName);
+	}
+	else{ // show merged
+		imp0.show();
+		imp1.show();
+		
+		IJ.run("Merge Channels...", "c1=tmp1 c2=tmp2 create");
+		IJ.run("Rename...", "title="+windowName);
+	}
+}
+
+
+
+
+/* -------------------------------------------------------------------------------------------------------
+*  Acquire t=0 images
+*  USAGE: store0=t0Images_acquireNStore(t0Path, pl, chanGroup, iChannel, nPositions, nChannels, iExposur, posLabel, xyDevice, zDevice)
+* ------------------------------------------------------------------------------------------------------- */
+Datastore t0Images_acquireNStore(String t0Path, PositionList pl, String chanGroup, String[] iChannel, int nPositions, int nChannels, Double[] iExposur, String[] posLabel, Double timeInterval, Alert currentState, Alert AcTrMStage){
+	// import org.micromanager.acquisition.SequenceSettings;
+	// loop through the positions and channels to get the first positions
+	// A RAM datastore stores all of its images on RAM, not on the hard drive.
+	// There are other options as described in the DataManager documentation.
+	
+	// Create a display for the datastore. This won't actually show up until there are images to see, though.
+	// DisplayWindow refDispWin = mm.displays().createDisplay(store0);
+	
+	// refDispWin.adjustZoom((double) 25.0);
+	// Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+	
+	// Snap an image. Don't display it in the snap/live display.
+	// List images = mm.live().snap(false);
+	
+	// Let's assume for now that we aren't using a multi-camera setup, so the above list only has one element.
+	// Image image = images.get(0);
+	
+	import org.micromanager.data.Coords;
+	import org.micromanager.data.Image;
+	import org.micromanager.data.Datastore;
+	import org.micromanager.display.DisplayWindow;
+	
+	import mmcorej.TaggedImage;
+	
+	
+	import org.micromanager.PositionList;
+	import org.micromanager.MultiStagePosition;
+	import org.micromanager.data.Metadata;
+	import org.micromanager.data.Metadata.MetadataBuilder;
+	import org.micromanager.display.DisplayWindow;
+	
+	/*
+	import org.micromanager.internal.MMStudio;
+	import org.micromanager.PositionList; // https://valelab4.ucsf.edu/~MM/doc-2.0.0-gamma/mmstudio/org/micromanager/PositionList.html
+	import org.micromanager.PositionListManager; 
+	import org.micromanager.MultiStagePosition; // https://valelab4.ucsf.edu/~MM/doc-2.0.0-gamma/mmstudio/org/micromanager/MultiStagePosition.html
+	import org.micromanager.StagePosition;
+	import org.micromanager.acquisition.SequenceSettings; // https://valelab4.ucsf.edu/~MM/doc-2.0.0-gamma/mmstudio/org/micromanager/SequenceSettings.html
+	import org.micromanager.display.DisplayWindow; // for adjustZoom
+	*/
+	
+	
+	Datastore store0 = mm.data().createRAMDatastore();
+	DisplayWindow display = mm.displays().createDisplay(store0);
+	mm.displays().manage(store0);
+	
+	/*
+	// Create a display for the datastore. This wont actually show up until there are images to see, though.
+	Datastore store0 = mm.data().createRAMDatastore();
+	MetadataBuilder metadataBuilder = mm.data().getMetadataBuilder(); // needed to store datastore
+	Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+	store0.setSummaryMetadata(mm.data().getSummaryMetadataBuilder().build()); // added Oct 26, 2018 to see if this supresses the inconsequencial error during restarting
+	mm.displays().createDisplay(store0);
+	
+	// DisplayWindow refDispWin = mm.getDisplayManager().createDisplay(store0);
+	
+	Pipeline pipeLine = mm.data().copyApplicationPipeline(store0, true); // to do processing of multiple images
+	*/
+	
+	// This method allows you to load a previously-saved set of acquisition settings, automatically populating the fields in the MDA dialog. You can create one of these acquisition settings files via the "Save as..." button in the MDA dialog. 
+	int itpos = 0;
+	int timeStart = System.currentTimeMillis();
+	for (int ixypos = 0; ixypos < nPositions; ixypos++) {
+		
+		print("Going to Position "+ posLabel[ixypos]);
+		currentState.setText("Going to Position "+ posLabel[ixypos]);
+		// move to next xyz position
+		MultiStagePosition.goToPosition(pl.getPosition(ixypos), mmc); // moves the stage and focus to the x, y, and z position defined by the position liste item
+		mmc.waitForDevice(xyDevice);
+		mmc.waitForDevice(zDevice);
+		
+		
+		for (int icpos = 0; icpos < nChannels; icpos++) {
+			// turn on specific lights and exposure
+			// set hardware to dedrift channel
+			mmc.setExposure(iExposur[icpos]); // set exposure
+			mmc.waitForSystem();
+			mmc.setConfig(chanGroup, iChannel[icpos]); //mmc.setConfig(channel_label, allChanls.get(deDrift_chanl).config);
+			mmc.waitForConfig(chanGroup, iChannel[icpos]); // mmc.waitForConfig(channel_label, allChanls.get(deDrift_chanl).config);
+			
+			//print("1. exposure ="+iExposur[icpos]);
+			/*
+			img = mm.acquisitions().snap().get(0);			
+			metadataBuilder.positionName("c="+IJ.d2s(icpos,0)+",p="+IJ.d2s(ixypos,0)); // needed to store datastore
+			
+			
+			//builder = builder.stagePosition(ixypos); 
+			//builder = builder.channel(icpos);
+			//builder = builder.time(itpos);
+			//img = img.copyAtCoords(builder.build());
+			coords = mm.data().createCoords("c="+IJ.d2s(icpos,0)+",p="+IJ.d2s(ixypos,0)+",t=0");
+			img = img.copyAtCoords(coords);
+			
+			img = img.copyWithMetadata(metadataBuilder.build());  // needed to store datastore
+			
+			//image.getMetadata(); 
+			store0.putImage(img);
+			*/
+			
+			mm.getCore().snapImage(); // also mmc.snapImage();
+			TaggedImage tmp = mm.getCore().getTaggedImage();
+			Image image1 = mm.data().convertTaggedImage(tmp);
+			MetadataBuilder mdb = image1.getMetadata().copy();
+			md = mdb.positionName(posLabel[ixypos]).xPositionUm(pl.getPosition(ixypos).getX()).yPositionUm(pl.getPosition(ixypos).getY()).build();
+			Coords coord = image1.getCoords().copy().channel(icpos).stagePosition(ixypos).build();
+			image1 = image1.copyWith(coord, md);
+			store0.putImage(image1);
+			
+			// send a copy of the image for ROI choice
+			if(recoveryFlags[ixypos][0]>0){// do recovery 
+				if(recoveryFlags[ixypos][1]==1){ // smaller region for refined recovery
+					if(recoveryChannel[ixypos][1]==icpos){
+						currentState.setText("Collecting ROI location for "+IJ.d2s(ixypos+1,0)+" of "+IJ.d2s(nPositions,0)+" positions");
+						collectRoi(ixypos, image1); // fill rois array in this function this array is defined in the main routine
+					}
+				}
+			}
+			
+			//print("2. exposure ="+iExposur[icpos]);
+			//coords = mm.data().createCoords("c="+IJ.d2s((double) icpos, 0)+",p="+IJ.d2s((double) ixypos, 0)+",t="+IJ.d2s((double) itpos, 0));
+			//Image img = imgList.get(0).copyAtCoords(coords);
+			//pipeLine.insertImage(img);
+			
+			
+			// example for how images can be saved as tiff if you choose to use metadata style to also store the regular tiff images
+			// https://github.com/dennis-tra/peem-controller/blob/master/src/main/java/de/agbauer/physik/OptimisationSeries/OptimisationSeriesExecuter.java
+			
+			
+			// save the image
+			//String sfname = "c"+IJ.d2s((double) icpos, 0)+"_p"+IJ.d2s((double) ixypos, 0)+"_t"+IJ.d2s((double) itpos, 0)+".tif";
+			
+			//mmc.snapImage();
+			//imgSh = mmc.getImage();
+			//width = (int) mmc.getImageWidth();
+			//height = (int) mmc.getImageHeight();
+			
+			// assumption is that the image acquired is 16 bit (bytedepth==2)
+			//sp = new ShortProcessor(width, height);
+			//sp.setPixels(imgSh);
+			
+			//save_tiff_image(sp, t0Path, sfname); // may want to get these numbers from the refImg CAUTION
+			
+		}
+	}
+	if(recoveryFlags[0][1]==1){ // any position uses smaller xCorr window size
+		// save the window sizes
+		save_rrr(txtPath, true);
+	}
+	int timeEnd = System.currentTimeMillis();
+	
+	// calculate time taken to go through the three nested loops
+	int tTaken = timeEnd-timeStart;
+	
+	print("Acquisition of reference images took "+tTaken/1000+" seconds");
+	currentState.setText("Acquisition of reference images took "+tTaken/1000+" seconds");
+	
+	store0.freeze();
+	
+	store0.save(Datastore.SaveMode.SINGLEPLANE_TIFF_SERIES, t0Path+"/store0");
+	store0.close();
+	
+	/*
+	// store0.freeze();
+	// store0.setSummaryMetadata(mm.data().getSummaryMetadataBuilder().build());
+	boolean jflag = store0.save(Datastore.SaveMode.SINGLEPLANE_TIFF_SERIES, t0Path+"/store0");
+	// boolean save(Datastore.SaveMode mode, java.lang.String path) // https://valelab4.ucsf.edu/~MM/doc-2.0.0-alpha/mmstudio/org/micromanager/data/Datastore.html#save(org.micromanager.data.Datastore.SaveMode,%20java.lang.String)
+	// As above, except uses the provided path (the last element of which is assumed to be a filename), instead of prompting the user. After this method, getSavePath() will return the input save path, unless there is an error while saving.
+	
+	// if(jflag){
+	// 	print("T0 images saved for potential recovery");
+	// }
+	*/
+	
+	// move to next xyz position
+	MultiStagePosition.goToPosition(pl.getPosition(0), mmc); // moves the stage and focus to the x, y, and z position defined by the position liste item
+	mmc.waitForDevice(xyDevice);
+	mmc.waitForDevice(zDevice);
+	
+	copy_refImages(t0Path, nPositions, nChannels);
+		
+	if(tTaken > timeInterval){
+		mm.logs().showError("Requested time interval is too small. It should increased by least "+IJ.d2s(tTaken-timeInterval,0)+" ms");
+		// error();
+	} else {
+		int tsleepTime = timeInterval - tTaken;
+		AcTrMStage.setText("--> Sleeping for "+IJ.d2s(Math.round(tsleepTime/1000.0),0)+" seconds");
+		sleepFunction(tsleepTime, currentState);
+	}
+	
+	return store0;
+}
+
+
+
+
+/* -------------------------------------------------------------------------------------------------------
+*  Copy reference image files into the tnimages directory so that they are readily available for data analysis
+*  USAGE: copy_refImages(t0Path, nPositions, nChannels);
+* ------------------------------------------------------------------------------------------------------- */
+copy_refImages(String t0Path, int nPositions, int nChannels){
+	
+	import ij.IJ;
+	
+	// http://www.beanshell.org/manual/bshcommands.html
+	String csuff;
+	String psuff;
+	for (int i=0; i<nPositions; i++) {
+		for (int j=0; j<nChannels; j++){
+			if(j<10)
+				csuff = "_channel00"+IJ.d2s(j,0);
+			else if(j<100)
+				csuff = "_channel0"+IJ.d2s(j,0);
+			else if(j<1000)
+				csuff = "_channel"+IJ.d2s(j,0);
+			else
+				print("Too many channels");
+			
+			if(i<10)
+				psuff = "_position00"+IJ.d2s(i,0);
+			else if(i<100)
+				psuff = "_position0"+IJ.d2s(i,0);
+			else if(i<1000)
+				psuff = "_position"+IJ.d2s(i,0);
+			else
+				print("Too many positions");
+			
+			String path1 = t0Path+"/store0/"+posLabel[i]+"/img"+csuff+psuff+"_time000000000_z000.tif";
+			String path2 = t0Path+"/../tnimgs/c"+IJ.d2s(j,0)+"_p"+IJ.d2s(i,0)+"_t0.tif";
+			cp(path1, path2);
+		}
+	}
+}
+
+
+
+
+/* -------------------------------------------------------------------------------------------------------
+*  Collect ROI
+*  USAGE: collectRoi(ixypos);
+* ------------------------------------------------------------------------------------------------------- */
+collectRoi(int ixypos, Image img){
+	
+	import ij.gui.Roi;
+	import ij.util.Tools; // to get double from string
+	import ij.gui.ImageWindow;
+	
+	Boolean retryBox = true;
+	String[] winSizes = new String[] {"64", "128", "256", "512", "1024"};
+	int defaultSz = 2; // index of the array winSizes
+	int winSz = (int) Tools.parseDouble(winSizes[defaultSz]); // default windowSize
+	String roiWin = "roiWin";
+	
+	while(retryBox){
+		ImageProcessor improc = mm.data().ij().createProcessor(img);
+		ImagePlus imgPlus = (new ImagePlus("displayImg", improc)).duplicate();
+		IJ.setTool("rectangle"); //wait(delay);
+		imgPlus.setRoi(0, 0, winSz, winSz);
+		imgPlus.show(); // necessary for ROI selection, do not comment this
+		
+		IJ.run("Rename...", "title="+roiWin);
+		
+		ImageWindow imWin = imgPlus.getWindow(); // works when show() is called
+		print(imWin.getHeight());
+		print(imWin.getWidth());
+		imWin.setLocationAndSize(0, 0, 600, 600);
+		
+		String userWinChoice = moveResizeROI(winSizes, defaultSz, "Reposition or resize ROI", "Drag desired sized ROI to the most textured location and then click OK");
+		
+		if(userWinChoice==winSizes[defaultSz]){ // proceed
+			// new WaitForUserDialog().show();
+			Roi oi = IJ.getImage().getRoi();
+			IJ.run("Close",roiWin);
+			bnd = oi.getBounds();
+			// print("bounds are: x="+IJ.d2s(bnd.x,0)+", y="+IJ.d2s(bnd.y,0)+", w="+IJ.d2s(bnd.width,0)+", h="+IJ.d2s(bnd.height,0));
+			
+			// following conditions are necessary for FHT to work
+			if((bnd.width == bnd.height) && (bnd.width % 2 == 0) && (bnd.height % 2 == 0)){
+				retryBox = false;
+				recoveryRegion[ixypos][0] = bnd.x;
+				recoveryRegion[ixypos][1] = bnd.y;
+				recoveryRegion[ixypos][2] = bnd.width;
+				recoveryRegion[ixypos][3] = bnd.height;
+			}
+		} else {
+			for(int i=0; i<winSizes.length; i++){
+				if(userWinChoice==winSizes[i]){
+					IJ.run("Close",roiWin);
+					defaultSz = i;
+					winSz = (int) Tools.parseDouble(winSizes[defaultSz]);
+				}
+			}
+		}
+	}
+}
+
+
+
+
+/* -------------------------------------------------------------------------------------------------------
+*  Gives option to select or resize ROI
+*  USAGE: moveResizeROI(winSizes, defaultChoice, ttle, msg);
+* ------------------------------------------------------------------------------------------------------- */
+String moveResizeROI(String[] winSizes, int defaultChoice, String ttle, String msg){
+	
+	import ij.gui.NonBlockingGenericDialog;
+	
+	NonBlockingGenericDialog dlg = new NonBlockingGenericDialog(ttle);
+	dlg.setLocation(600, 0);
+	dlg.setAlwaysOnTop(true);
+	dlg.addRadioButtonGroup("Choices for ROI size: ", winSizes, 1, winSizes.length, winSizes[defaultChoice]);
+	dlg.addMessage(msg,font1,Color.BLACK);
+	dlg.setOKLabel("Accept location and size");
+	dlg.setCancelLabel("Update size");
+	// dlg.hideCancelButton();
+	dlg.showDialog();
+	String winChoice = dlg.getNextRadioButton();
+	
+	return winChoice;
+}
+
+
+
+
+/* -------------------------------------------------------------------------------------------------------
+*  Saves user settings into a text file, useful when restarting a run
+*  USAGE: workInProgressWarning(ttle, msg);
+* ------------------------------------------------------------------------------------------------------- */
+NonBlockingGenericDialog workInProgressWarning(String ttle, String msg){
+	
+	import ij.gui.NonBlockingGenericDialog;
+	
+	NonBlockingGenericDialog dlg = new NonBlockingGenericDialog(ttle);
+	dlg.setLocation(600, 0);
+	dlg.setAlwaysOnTop(true);
+	dlg.addMessage(msg,font2,Color.RED);
+	dlg.hideCancelButton();
+	dlg.showDialog();
+	
+	return dlg;
+}
+
+
+
+
+ignoreMessage(String msage){
+	import org.micromanager.internal.utils.ReportingUtils;
+	ReportingUtils.displayNonBlockingMessage(msage); // gives nonblocking warning
+	
+}
+
+
+
+/* -------------------------------------------------------------------------------------------------------
+*  Saves user settings into a text file, useful when restarting a run
+*  USAGE: save_rrr(t0path, false);
+* ------------------------------------------------------------------------------------------------------- */
+save_rrr(String t0path, Boolean saveWindowsOnly){
+	import ij.IJ;
+	import ij.text.TextWindow;
+	
+	if(!saveWindowsOnly){
+		// save recoveryFlags
+		itxt = new TextWindow("recoveryFlags", "", 500, 500);
+		String js = IJ.d2s(recoveryFlags[0][0],0) + "\t" + IJ.d2s(recoveryFlags[0][1],0);
+		itxt.append(js);
+		txtPnl = itxt.getTextPanel();
+		txtPnl.saveAs(t0path + "/recoveryFlags.txt");
+		itxt.close();
+		
+		// save recoveryFlags_other
+		itxt = new TextWindow("recoveryFlags_other", "", 500, 500);
+		String js = IJ.d2s(recoveryFlags_other[0],0) + "\t" + IJ.d2s(recoveryFlags_other[1],0) + "\t" + IJ.d2s(recoveryFlags_other[2],0);
+		itxt.append(js);
+		txtPnl = itxt.getTextPanel();
+		txtPnl.saveAs(t0path + "/recoveryFlags_other.txt");
+		itxt.close();
+		
+		// see if there are other things that need to be saved	
+		if(recoveryFlags[0][0]>0){ // recovery is done at least the first one
+			// save rough recoery channel
+			itxt = new TextWindow("RoughRecoveryChannel", "", 500, 500);
+			for(int i=0; i<nPositions; i++){
+				String js = IJ.d2s(recoveryChannel[i][0],0) + "\t" + IJ.d2s(0,0) ; // second filler number is there only to get the reading work
+				itxt.append(js);
+			}
+			txtPnl = itxt.getTextPanel();
+			txtPnl.saveAs(t0path + "/roughRecoveryChannel.txt");
+			itxt.close();
+		}
+	}
+	
+	if(recoveryFlags[0][0]>1){ // refined recovery is also done
+		if(!saveWindowsOnly){
+			// save rough recoery channel
+			itxt = new TextWindow("RefinedRecoveryChannel", "", 500, 500);
+			for(int i=0; i<nPositions; i++){
+				String js = IJ.d2s(recoveryChannel[i][1],0) + "\t" + IJ.d2s(0,0) ; // second filler number is there only to get the reading work
+				itxt.append(js);
+			}
+			txtPnl = itxt.getTextPanel();
+			txtPnl.saveAs(t0path + "/refinedRecoveryChannel.txt");
+			itxt.close();
+		}
+		                                       
+		// save recoveryRegion for refined recovery
+		itxt = new TextWindow("refinedRecoveryRegion", "", 500, 500);
+		for(int i=0; i<nPositions; i++){
+			String js = IJ.d2s(recoveryRegion[i][0],0) + "\t" + IJ.d2s(recoveryRegion[i][1],0) + "\t" + IJ.d2s(recoveryRegion[i][2],0) + "\t" + IJ.d2s(recoveryRegion[i][3],0);
+			itxt.append(js);
+		}
+		txtPnl = itxt.getTextPanel();
+		txtPnl.saveAs(t0path + "/refinedRecoveryRegion.txt");
+		itxt.close();
+	}
+}
+
+
+
+
+/* -------------------------------------------------------------------------------------------------------
+*  Saves user settings into a text file, useful when restarting a run
+*  USAGE: read_rrr(t0path);
+* ------------------------------------------------------------------------------------------------------- */
+read_rrr(String jpath){
+	//	import ij.IJ;
+	//	import ij.text.TextWindow;
+	import ij.measure.ResultsTable;
+	
+	// read recoveryFlags
+	rt = new ResultsTable();
+	val=rt.open(jpath + "/recoveryFlags.txt");
+	num0 = val.getColumn(0);
+	num1 = val.getColumn(1);
+	recoveryFlags[0][0] = (int) num0[0];
+	recoveryFlags[0][1] = (int) num1[0];
+	//print("recoveryFlags[0][0]="+IJ.d2s(recoveryFlags[0][0],0));
+	//print("recoveryFlags[0][1]="+IJ.d2s(recoveryFlags[0][1],0));
+	
+	// read recoveryFlags_other
+	// rt = new ResultsTable();
+	val=rt.open(jpath + "/recoveryFlags_other.txt");
+	num0 = val.getColumn(0);
+	num1 = val.getColumn(1);
+	num2 = val.getColumn(2);
+	recoveryFlags_other[0] = (int) num0[0];
+	recoveryFlags_other[1] = (int) num1[0];
+	recoveryFlags_other[2] = (int) num2[0];
+	
+	// see if there are other things that need to be saved	
+	if(recoveryFlags[0][0]>0){ // recovery is done at least the first one
+		// read rough recovery channel
+		val=rt.open(jpath + "/roughRecoveryChannel.txt");
+		num0 = val.getColumn(0);
+		for(int i=0; i<nPositions; i++){
+			recoveryChannel[i][0] = (int) num0[i];
+			//print("recoveryChannel[" + i + "][0]="+IJ.d2s(recoveryChannel[i][0],0));
+		}
+	}
+	
+	if(recoveryFlags[0][0]>1){ // refined recovery is also done
+		// read rough recoery channel
+		val=rt.open(jpath + "/refinedRecoveryChannel.txt");
+		num0 = val.getColumn(0);
+		for(int i=0; i<nPositions; i++){
+			recoveryChannel[i][1] = (int) num0[i];
+			//print("recoveryChannel[" + i + "][1]="+IJ.d2s(recoveryChannel[i][1],0));
+		}
+		
+		// read recoveryRegion for refined recovery
+		val=rt.open(jpath + "/refinedRecoveryRegion.txt");
+		num0 = val.getColumn(0);
+		num1 = val.getColumn(1);
+		num2 = val.getColumn(2);
+		num3 = val.getColumn(3);
+		for(int i=0; i<nPositions; i++){
+			recoveryRegion[i][0] = (int) num0[i];
+			recoveryRegion[i][1] = (int) num1[i];
+			recoveryRegion[i][2] = (int) num2[i];
+			recoveryRegion[i][3] = (int) num3[i];
+			//print("recoveryRegion[" + i + "][0]="+IJ.d2s(recoveryRegion[i][0],0));
+			//print("recoveryRegion[" + i + "][1]="+IJ.d2s(recoveryRegion[i][1],0));
+			//print("recoveryRegion[" + i + "][2]="+IJ.d2s(recoveryRegion[i][2],0));
+			//print("recoveryRegion[" + i + "][3]="+IJ.d2s(recoveryRegion[i][3],0));
+		}
+	}	
+}
+
+
+
+/* -------------------------------------------------------------------------------------------------------
+*  Acquire t=0 images
+*  USAGE: Datastore store0=t0Images_load(t0Path);
+* ------------------------------------------------------------------------------------------------------- */
+Datastore t0Images_loadNshow(String t0Path){
+	
+	import org.micromanager.internal.MMStudio;
+	import org.micromanager.PositionList; // https://valelab4.ucsf.edu/~MM/doc-2.0.0-gamma/mmstudio/org/micromanager/PositionList.html
+	import org.micromanager.PositionListManager; 
+	import org.micromanager.MultiStagePosition; // https://valelab4.ucsf.edu/~MM/doc-2.0.0-gamma/mmstudio/org/micromanager/MultiStagePosition.html
+	import org.micromanager.StagePosition;
+	import org.micromanager.acquisition.SequenceSettings; // https://valelab4.ucsf.edu/~MM/doc-2.0.0-gamma/mmstudio/org/micromanager/SequenceSettings.html
+	import org.micromanager.display.DisplayWindow; // for adjustZoom
+	
+	
+	Datastore store0 = mm.data().createRAMDatastore();
+	
+	openAsVirtualStack = true;
+	store0 = mm.data().loadData(t0Path+"/store0", openAsVirtualStack);
+	
+	// mm.displays().createDisplay(store0);
+	
+	
+	/*	
+	Datastore store0 = mm.data().createRAMDatastore();
+	//mm.displays().createDisplay(store0);
+	
+	ignoreMessage("\n\nRegarding Error messages related to StorageSinglePlaneTiffSeries.java: 109  \n Number of error messages = number of positions \n Ignore all of these messages");
+	
+	openAsVirtualStack = true;
+	store0 = mm.data().loadData(t0Path+"/store0", openAsVirtualStack);
+	// DisplayWindow refDispWin = mm.getDisplayManager().createDisplay(store0);
+	*/
+	
+	//boolean jflag = store0.save(Datastore.SaveMode.SINGLEPLANE_TIFF_SERIES, t0Path+"rec.tif");
+	print("Total number of images in the store = npos*nchannels = " + IJ.d2s(store0.getNumImages(),0)); 
+	
+	// move to next xyz position
+	MultiStagePosition.goToPosition(pl.getPosition(0), mmc); // moves the stage and focus to the x, y, and z position defined by the position liste item
+	mmc.waitForDevice(xyDevice);
+	mmc.waitForDevice(zDevice);
+	
+	return store0;
+}
+
+
+
+
+/* -------------------------------------------------------------------------------------------------------
+*  Write Strings to a file
+*  write_strings_to_file("C:/Users/IMBL_admin/data/Sept12_2018/repeat_seq11/refs/tmp.txt", "This is cool\n and also this \n and that");
+*  ------------------------------------------------------------------------------------------------------ */
+write_strings_to_file(String path, String contents){
+	import org.micromanager.internal.utils.TextUtils;
+	
+	TextUtils.writeTextFile(path, contents);
+}
+
+
+
+/* -------------------------------------------------------------------------------------------------------
+*  Write Strings to a file
+*  write_strings_to_file("C:/Users/IMBL_admin/data/Sept12_2018/repeat_seq11/refs/tmp.txt", "This is cool\n and also this \n and that");
+*  this function Does not work
+*  ------------------------------------------------------------------------------------------------------ */
+saveToFile(String path, String contents){
+	import ij.IJ;
+	
+	IJ.open(path); // display file open dialog
+	for (i=0; i<=2*PI; i+=0.01)
+		IJ.append(path, "Hello"+IJ.d2s(i,0)+contents);
+	IJ.close(path);
+}
+
+
+
+/* -------------------------------------------------------------------------------------------------------
+*  save position list in a unique file, have a provision to retrive t=0 or last file
+*  write_strings_to_file("C:/Users/IMBL_admin/data/Sept12_2018/repeat_seq11/refs/tmp.txt", "This is cool\n and also this \n and that");
+*  this function Does not work
+*  ------------------------------------------------------------------------------------------------------ */
+positionListFileSave(PositionList pl, String posFoldr){
+	// update coordinates are saved in _1 _2 _3 file
+	String newfname = getUniqueName_posFile(posFoldr, postionListFname, false);
+	
+	positionsFile = posFoldr+newfname;
+	
+	pl.save(positionsFile);
+}
+
+
+
+
+/* -------------------------------------------------------------------------------------------------------
+*  save position list in a unique file, have a provision to retrive t=0 or last file
+*  write_strings_to_file("C:/Users/IMBL_admin/data/Sept12_2018/repeat_seq11/refs/tmp.txt", "This is cool\n and also this \n and that");
+*  this function Does not work
+*  USAGE:  PositionList pl = positionListFileRead(posFoldr, posFile, true);
+*  ------------------------------------------------------------------------------------------------------ */
+PositionList positionListFileRead(String posFoldr, String posFile, Boolean fstOrlst){
+	// fstOrlst = true = first position list file that corresponding to t=0
+	// fstOrlst = false = last position list file that corresponding to _1 or _2 or _3 whichever was the last
+	
+	import org.micromanager;
+	
+	String posFile1; 
+	if(fstOrlst){ // first position
+		posFile1 = posFile;
+	} else { // last position
+		posFile1 = getUniqueName_posFile(posFoldr, posFile, true);
+	}
+	
+	PositionList pl = new PositionList();
+	
+	print("loading positionList from "+posFoldr+"/"+posFile1);
+	pl.load(posFoldr+"/"+posFile1);
+	
+	return pl;
+}
+
+
+
+/* -------------------------------------------------------------------------------------------------------
+* Gets a file name, checks if it exists, if it does, then it returns a unique name. it is made unique using _number
+* if a flag is set on, it will return last unique name instead of a new unique name
+* USAGE: String newfname = getUniqueName(foldr, fname, false);
+*  ------------------------------------------------------------------------------------------------------ */
+String getUniqueName(String foldr, String fname, Boolean returnLastName){
+	
+	import ij.IJ;
+	import ij.util.Tools;
+	
+ 	File f = new File(foldr, fname);
+	newName = fname;
+	
+	int i = 0;
+	while(f.exists()) {
+		i = i+1;
+		newName = fname + "_" + IJ.d2s(i,0);
+		f = new File(foldr, newName);
+	}
+	
+	if(returnLastName){ 
+		if(i==1){ // Tools.parseDouble(String); // returns Double.NaN if string is nonparsable 
+			newName = fname;
+		} else {
+			newName = fname + "_" + IJ.d2s(i-1,0);
+		}		
+	}
+	
+	return newName;
+}
+
+
+
+
+/* -------------------------------------------------------------------------------------------------------
+* Gets a file name, checks if it exists, if it does, then it returns a unique name. it is made unique using _number
+* if a flag is set on, it will return last unique name instead of a new unique name
+* USAGE: String newfname = getUniqueName_posFile(foldr, fname, false);
+*  ------------------------------------------------------------------------------------------------------ */
+String getUniqueName_posFile(String foldr, String fname, Boolean returnLastName){
+	
+	import ij.IJ;
+	import ij.util.Tools;
+	
+	// assumes three character suffix
+	String prefix = fname.substring(0,fname.length()-4);
+	String suffix = fname.substring(fname.length()-4,fname.length());
+	
+ 	File f = new File(foldr, prefix+suffix);
+	newName = fname;
+	
+	int i = 0;
+	while(f.exists()) {
+		i = i+1;
+		newName = prefix + "_" + IJ.d2s(i,0) + suffix;
+		f = new File(foldr, newName);
+	}
+	
+	if(returnLastName){ 
+		if(i==1){ // Tools.parseDouble(String); // returns Double.NaN if string is nonparsable 
+			newName = prefix+suffix;
+		} else {
+			newName = prefix + "_" + IJ.d2s(i-1,0) + suffix;
+		}		
+	}
+	
+	return newName;
+}
+
+
+
+
+
+
+/* -------------------------------------------------------------------------------------------------------
+* Check if the stage position has changed by a 1/1000, if yes, then update the postion and save it in a file
+* USAGE: pl = checkMotionNSave(pl, driftAssessment, nPositions, posLabel, currentState, jsaveFldr);
+*  ------------------------------------------------------------------------------------------------------ */
+PositionList checkMotionNSave(PositionList pl, Double[][] driftAssessment, int nPositions, String[] posLabel, Alert currentState, String jsaveFldr)
+{
+	import org.micromanager.PositionList; // https://valelab4.ucsf.edu/~MM/doc-2.0.0-gamma/mmstudio/org/micromanager/PositionList.html
+	import org.micromanager.PositionListManager; 
+	import org.micromanager.MultiStagePosition; // https://valelab4.ucsf.edu/~MM/doc-2.0.0-gamma/mmstudio/org/micromanager/MultiStagePosition.html
+	import org.micromanager.StagePosition;	
+	import ij.IJ;
+	
+	Double[] netDrift = new Double[]{0.0, 0.0, 0.0}; // x drift, y drift, z drift
+	
+	Double[] xdrifts = new Double[nPositions];
+	Double[] ydrifts = new Double[nPositions];
+	Double[] zdrifts = new Double[nPositions];
+	
+	for(int i=0; i<nPositions; i++){
+		xdrifts[i] = driftAssessment[i][0] - pl.getPosition(i).getX();
+		ydrifts[i] = driftAssessment[i][1] - pl.getPosition(i).getY();
+		zdrifts[i] = driftAssessment[i][2] - pl.getPosition(i).getZ();
+	}
+	
+	// check mininum
+	xDrift = find_drift(xdrifts);
+	yDrift = find_drift(ydrifts);
+	zDrift = find_drift(zdrifts);
+	
+	print("net Drifts: x="+IJ.d2s(xDrift,3)+", y="+IJ.d2s(yDrift,3)+", z="+IJ.d2s(zDrift,3));
+	
+	updateFlag = false;
+	if((Math.abs(xDrift)+Math.abs(yDrift)+Math.abs(zDrift)) > 0.0){
+		updateFlag = true;
+	}
+	if(updateFlag){
+		currentState.setText("Net drift updated: "+IJ.d2s(xDrift,3)+", "+IJ.d2s(yDrift,3)+", "+IJ.d2s(zDrift,3));
+		print("Net drift updated: "+IJ.d2s(xDrift,3)+", "+IJ.d2s(yDrift,3)+", "+IJ.d2s(zDrift,3));
+		for(int i=0; i < nPositions; i++){
+			posX = pl.getPosition(i).getX() + xDrift;
+			posY = pl.getPosition(i).getY() + yDrift;
+			//currentState.setText("---> Position List is updated only for Z!!!"); // above two comments at the end of the sentence silence updating of X an Y. This is done because there is sliding at the Z motor and not at the XY stage
+			currentState.setText("---> Position List is updated X Y and Z!!!"); // above two comments at the end of the sentence silence updating of X an Y. This is done because there is sliding at the Z motor and not at the XY stage
+			posZ = pl.getPosition(i).getZ() + zDrift;
+			MultiStagePosition updatedPos = new MultiStagePosition(xyDevice, posX, posY, zDevice, posZ);
+			updatedPos.setLabel(posLabel[i]);
+			int posIndx = pl.getPositionIndex(posLabel[i]);
+			pl.replacePosition(posIndx, updatedPos);
+		}
+		
+		currentState.setText("Saving update position file in "+jsaveFldr);
+		print("Saving update position file in "+jsaveFldr);
+		positionListFileSave(pl, jsaveFldr);
+		IJ.beep();
+	}
+	
+	return pl;
+}
+
+
+
+/* -------------------------------------------------------------------------------------------------------
+* Acquire the data
+* USAGE: acquireData(xyDevice, zDevice, pixSz, saveDir, foldrPrefix, dataFoldr, store0, pl, posLabel, chanGroup, nframes, nPositions, nChannels, 
+iExposur, iChannel, timeInterval);
+*  ------------------------------------------------------------------------------------------------------ */
+acquireData(int startingITPOS, Double pixSz, String saveDir, String foldrPrefix, String dataFoldr, Datastore store0, PositionList pl, String[] posLabel, String chanGroup, int nframes, int nPositions, int nChannels, Double[] iExposur, String[] iChannel, Double timeInterval, Alert AcTrMStage, Alert currentState, Alert currentTimePoint, double acceptableCorrCoeff, double xyTolerance, double zTolerance_1, double zTolerance_2, boolean showDriftOverlapped, boolean showXCorrMap, String starting_zsearch_dir){
+	
+	import org.micromanager.internal.MMStudio;
+	import org.micromanager.PositionList; // https://valelab4.ucsf.edu/~MM/doc-2.0.0-gamma/mmstudio/org/micromanager/PositionList.html
+	import org.micromanager.PositionListManager; 
+	import org.micromanager.MultiStagePosition; // https://valelab4.ucsf.edu/~MM/doc-2.0.0-gamma/mmstudio/org/micromanager/MultiStagePosition.html
+	import org.micromanager.StagePosition;
+	import org.micromanager.acquisition.SequenceSettings; // https://valelab4.ucsf.edu/~MM/doc-2.0.0-gamma/mmstudio/org/micromanager/SequenceSettings.html
+	import org.micromanager.display.DisplayWindow; // for adjustZoom
+	import ij.measure.ResultsTable;
+	import ij.text.TextWindow;
+	import ij.WindowManager;
+	import java.awt.Window;
+	import ij.ImagePlus;
+	
+	// This method allows you to load a previously-saved set of acquisition settings, automatically populating the fields in the MDA dialog. You can create one of these acquisition settings files via the "Save as..." button in the MDA dialog. 
+	
+	Double[][] driftAssessment = new Double[nPositions][3]; // for each position there is x, y, and z
+	// Double[nPositions][0]; // x
+	// Double[nPositions][1]; // y
+	// Double[nPositions][2]; // z
+	
+	// it appears that updating position list (x,y) was creating unnecessary jitters in the recovered positions
+	// so it is best to remove the updating of (x,y)
+	// but it appears that this may not be the case for Z as the motor seems to have some slip at the rubber pad and metal knob interface
+	// test whether updating z alone is useful.
+	
+	if(startingITPOS>=nframes){
+		currentState.setText("--> Finished data acquisition!");
+		AcTrMStage.setText("--> Finished data acquisition!");
+		return;
+	}
+	
+	
+	ResultsTable qualityOut = new ResultsTable();
+	Window resWin;
+	for (int itpos = startingITPOS; itpos < nframes+1; itpos++) {
+		
+		currentTimePoint.setText(IJ.d2s(itpos,0)+" of "+IJ.d2s(nframes,0));
+		
+		int timeStart = System.currentTimeMillis();
+		
+		qualityOut.reset();
+		qualityOut.setPrecision(3);
+		
+		for (int ixypos = 0; ixypos < nPositions; ixypos++) {
+			
+			if(recoveryFlags[0][0]>0){
+				qualityOut.incrementCounter();
+				qualityOut.setLabel(posLabel[ixypos], ixypos);
+				//qualityOut.show(resultsFname+"Time point "+IJ.d2s(itpos,0)+" of "+IJ.d2s(nframes+1,0));
+				
+				//resWin = WindowManager.getWindow(resultsFname+"Time point "+IJ.d2s(itpos,0)+" of "+IJ.d2s(nframes+1,0));
+				//resWin.setSize(350, 500);
+				//resWin.setLocation(0,500);
+				//resWin.setAlwaysOnTop(true);
+			}
+			
+			String jstring = "Moving to position: "+posLabel[ixypos]; 
+			print("\n\n\n--> Going for Position #"+IJ.d2s(ixypos));
+			print("--> "+jstring+", X="+pl.getPosition(ixypos).getX()+", Y="+pl.getPosition(ixypos).getY()+", Z="+pl.getPosition(ixypos).getZ());
+			currentState.setText(jstring);
+			AcTrMStage.setText("--> Acquiring MSM data for position "+posLabel[ixypos]+" (#"+IJ.d2s(ixypos+1,0)+" of "+IJ.d2s(nPositions,0)+")");
+			
+			// move to next xyz position
+			MultiStagePosition.goToPosition(pl.getPosition(ixypos), mmc); // moves the stage and focus to the x, y, and z position defined by the position liste item
+			mmc.waitForDevice(xyDevice);
+			mmc.waitForDevice(zDevice);
+			
+			
+			/* ----------------------------------------------------------------------------------------------------
+			* following lines introduce error and are there only to test x,y,z recovery protocol, remove it for routine use
+			* ---------------------------------------------------------------------------------------------------- * / 
+			Double dx = 10.0*(Math.random()-0.5)*2.0;
+			Double dy = 10.0*(Math.random()-0.5)*2.0;
+			Double dz = 10.0*(Math.random()-0.5)*2.0; // 0.001;
+			moveRelative3D(dx, dy, dz, xyDevice, zDevice);
+			
+			Double curPosX = mmc.getXPosition(xyDevice);
+			Double curPosY = mmc.getYPosition(xyDevice);
+			mmc.waitForDevice(xyDevice);
+			
+			Double curPosZ = mmc.getPosition(zDevice);
+			mmc.waitForDevice(zDevice);
+			jstring = "Added error";
+			print("---> "+jstring+": updated pos X="+curPosX+", Y="+curPosY+", Z="+curPosZ);
+			currentState.setText(jstring);
+			/ * ---------------------------------------------------------------------------------------------------- */  
+			
+			boolean doUpdating = false;
+			if(recoveryFlags[0][0]>0){// do rough recovery
+				for (int icpos = 0; icpos < nChannels; icpos++) {
+					if(icpos==recoveryChannel[ixypos][0]){ // relocation is done only for channel zerow which is reserved for the reference image
+						
+						//print("recoveryChannel[" + ixypos + "][0]="+IJ.d2s((double) icpos,0));
+						// turn on specific lights and exposure	
+						// set hardware to dedrift channel
+						mmc.setExposure(iExposur[icpos]); // set exposure
+						mmc.waitForSystem();
+						mmc.setConfig(chanGroup, iChannel[icpos]); //mmc.setConfig(channel_label, allChanls.get(deDrift_chanl).config);
+						mmc.waitForConfig(chanGroup, iChannel[icpos]); // mmc.waitForConfig(channel_label, allChanls.get(deDrift_chanl).config);
+						print("--> Rough recovery: channel="+IJ.d2s(icpos, 0)+", pos="+IJ.d2s(ixypos, 0)+", t=0");
+						
+						Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+						builder = builder.z(0).time(0).channel(icpos).stagePosition(ixypos);
+						Coords coords = builder.build();
+						Image refImg = store0.getImage(coords);
+						
+						/*
+						// get the reference image in the form of an ImageProcessor
+						coords = mm.data().createCoords("c="+IJ.d2s(icpos, 0)+",p="+IJ.d2s(ixypos, 0)+",t=0"); // reference images are in time 0 and channel 0
+						Image refImg = store0.getImage(coords);
+						*/
+						
+						ImageProcessor refProc = mm.data().ij().createProcessor(refImg);
+						refProc.resetRoi();
+						// refProc.rotate((double) -90.0); // apparently not needed if saving of t0 images is done by saving datastore
+						ImagePlus refImgPlus = (new ImagePlus("refImage"+IJ.d2s((double) ixypos,0), refProc)).duplicate();   
+						ImageConverter iconv = new ImageConverter(refImgPlus);
+						iconv.convertToGray32();
+						refImgPlus.updateImage();
+						//refImgPlus.show(); // will show the image comment after code is developed
+						
+						// boolean makeAdjustmentsFlag = isPositionPerfect(refImgPlus, false, true, showXCorrMap, ixypos, acceptableCorrCoeff, currentState);  // added Dec 20, 2018
+						boolean makeAdjustmentsFlag = isPositionPerfect(refImgPlus, refProc, pixSz, false, true, showXCorrMap, ixypos, acceptableCorrCoeff, currentState);  // added Dec 20, 2018
+						if(makeAdjustmentsFlag){ // added Dec 20, 2018
+							print("--> Recovering rough xy");
+							currentState.setText("Recovering rough xy");
+							// match along xy
+							// recover_xy(refProc, pixSz, showDriftOverlapped, showXCorrMap, xyTolerance, false, ixypos, currentState);
+							ImagePlus refIP_dup = refImgPlus.duplicate();
+							recover_xy(refIP_dup, pixSz, showDriftOverlapped, showXCorrMap, xyTolerance, false, ixypos, currentState);
+							
+							print("--> Recovering rough z");
+							currentState.setText("Recovering rough z");
+							double startZPos = pl.getPosition(ixypos).getZ();
+							ImagePlus refIP_dup = refImgPlus.duplicate();
+							recover_z(refIP_dup, starting_zsearch_dir, startZPos, zTolerance_1, false, true, ixypos, acceptableCorrCoeff, currentState);
+							doUpdating = true;
+						}
+					}
+				}	
+				
+				if(recoveryFlags[0][0]>1){// do refined recovery
+					for (int icpos = 0; icpos < nChannels; icpos++) {
+						if(icpos==recoveryChannel[ixypos][1]){ // if channel matches with refined recovery channel
+							// print("recoveryChannel[" + ixypos + "][0]="+IJ.d2s(icpos,0));
+							// turn on specific lights and exposure		
+							// set hardware to dedrift channel
+							// print("Going for refined recovery");
+							mmc.setExposure(iExposur[icpos]); // set exposure
+							mmc.waitForSystem();
+							mmc.setConfig(chanGroup, iChannel[icpos]); //mmc.setConfig(channel_label, allChanls.get(deDrift_chanl).config);
+							mmc.waitForConfig(chanGroup, iChannel[icpos]); // mmc.waitForConfig(channel_label, allChanls.get(deDrift_chanl).config);
+							
+							// get the reference image in the form of an ImageProcessor
+							print("--> Refined recovery: channel="+IJ.d2s(icpos, 0)+", pos="+IJ.d2s(ixypos, 0)+", t=0");
+							
+							Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+							builder = builder.z(0).time(0).channel(icpos).stagePosition(ixypos);
+							Coords coords = builder.build();
+							Image refImg = store0.getImage(coords);
+							
+							/*							coords = mm.data().createCoords("c="+IJ.d2s(icpos, 0)+",p="+IJ.d2s(ixypos, 0)+",t=0"); // reference images are in time 0 and channel 0
+							Image refImg = store0.getImage(coords);
+							*/
+							
+							ImageProcessor refProc = mm.data().ij().createProcessor(refImg);
+							refProc.setRoi(recoveryRegion[ixypos][0],recoveryRegion[ixypos][1],recoveryRegion[ixypos][2],recoveryRegion[ixypos][3]);
+							refProcC = refProc.crop();
+							// refProc.rotate((double) -90.0); // apparently not needed if saving of t0 images is done by saving datastore
+							ImagePlus refImgPlus = (new ImagePlus("refImage"+IJ.d2s((double) ixypos,0), refProcC)).duplicate();   
+							ImageConverter iconv = new ImageConverter(refImgPlus);
+							iconv.convertToGray32();
+							refImgPlus.updateImage();
+							// refImgPlus.show(); // will show the image comment after code is developed
+							
+							// boolean makeAdjustmentsFlag = isPositionPerfect(refImgPlus, true, true, showXCorrMap, ixypos, acceptableCorrCoeff, currentState);  // added Dec 20, 2018
+							boolean makeAdjustmentsFlag = isPositionPerfect(refImgPlus, refProc, pixSz, true, true, showXCorrMap, ixypos, acceptableCorrCoeff, currentState);  // added Dec 20, 2018
+							if(makeAdjustmentsFlag){ // added Dec 20, 2018
+								print("--> Recovering refined xy");
+								currentState.setText("Recovering refined xy");
+								// match along xy
+								// recover_xy(refProcC, pixSz, showDriftOverlapped, showXCorrMap, xyTolerance, true, ixypos, currentState);
+								ImagePlus refIP_dup = refImgPlus.duplicate();
+								recover_xy(refIP_dup, pixSz, showDriftOverlapped, showXCorrMap, xyTolerance, true, ixypos, currentState);
+								
+								print("--> Recovering refined z");
+								currentState.setText("Recovering refined z");
+								double startZPos = mmc.getPosition(zDevice); // start where the rough recovery left off
+								ImagePlus refIP_dup = refImgPlus.duplicate();
+								recover_z(refIP_dup, starting_zsearch_dir, startZPos, zTolerance_2, true, true, ixypos, acceptableCorrCoeff, currentState);
+								doUpdating = true;
+							}
+						}
+					}
+				}
+				
+				if(doUpdating){
+					// check if the new position is different from old position, if yes, then save it
+					double[] pos_old = new double[] {pl.getPosition(ixypos).getX(), pl.getPosition(ixypos).getY(), pl.getPosition(ixypos).getZ()};
+					double[] pos_new = new double[] {mmc.getXPosition(xyDevice), mmc.getYPosition(xyDevice), mmc.getPosition(zDevice)};
+					
+					driftAssessment[ixypos][0] = pos_new[0];
+					driftAssessment[ixypos][1] = pos_new[1];
+					driftAssessment[ixypos][2] = pos_new[2];
+					
+					mmc.waitForDevice(xyDevice);	
+					mmc.waitForDevice(zDevice);
+				} else { // 012219
+					driftAssessment[ixypos][0] = pl.getPosition(ixypos).getX(); // 012219
+					driftAssessment[ixypos][1] = pl.getPosition(ixypos).getY(); // 012219
+					driftAssessment[ixypos][2] = pl.getPosition(ixypos).getZ(); // 012219
+				}
+			}
+			
+			// recovery is done, now save the images
+			for (int icpos = 0; icpos < nChannels; icpos++) {
+				// turn on specific lights and exposure		
+				// set hardware to dedrift channel
+				mmc.setExposure(iExposur[icpos]); // set exposure
+				mmc.waitForSystem();
+				mmc.setConfig(chanGroup, iChannel[icpos]); //mmc.setConfig(channel_label, allChanls.get(deDrift_chanl).config);
+				mmc.waitForConfig(chanGroup, iChannel[icpos]); // mmc.waitForConfig(channel_label, allChanls.get(deDrift_chanl).config);
+				
+				String sfPath = saveDir+foldrPrefix+"/"+dataFoldr;
+				//print("path="+sfPath);
+				String sfname = "c"+IJ.d2s((double) icpos, 0)+"_p"+IJ.d2s((double) ixypos, 0)+"_t"+IJ.d2s((double) itpos, 0)+".tif";
+				//print("fname="+sfname);
+				
+				mmc.snapImage();
+				img = mmc.getImage();
+				width = (int) mmc.getImageWidth();
+				height = (int) mmc.getImageHeight();
+				
+				// assumption is that the image acquired is 16 bit (bytedepth==2)
+				sp = new ShortProcessor(width, height);
+				sp.setPixels(img);
+				currentState.setText("Saving tiff file");
+				save_tiff_image(sp, sfPath, sfname, currentState); // may want to get these numbers from the refImg CAUTION
+				
+			}
+			
+			if(recoveryFlags[0][0]>0){
+				qualityOut.addValue("Xdrift_pixels", xyDrift_zCorrCoeff[ixypos][0]);
+				qualityOut.addValue("Ydrift_pixels", xyDrift_zCorrCoeff[ixypos][1]);
+				qualityOut.addValue("One_minus_XCorrCoeff", xyDrift_zCorrCoeff[ixypos][2]);
+				//qualityOut.show(resultsFname+"Time point "+IJ.d2s(itpos,0)+" of "+IJ.d2s(nframes+1,0));
+			}
+		}
+		
+		if(recoveryFlags[0][0]>0){// do rough recovery
+			// save the results table
+			qualityOut.saveAs(saveDir+foldrPrefix+"/"+dataFoldr+"/"+IJ.d2s(itpos,0)+"_"+resultsFname);
+			
+			// reset the results table 
+			//resWin.close();
+
+			// workInProgressWarning("WIP: acquireData", "Updating of PositionList suppressed to test if that can improve recovery further");
+			//print("PositionList: Only Z is updated, XY is not");
+			//AcTrMStage.setText("PositionList: Only Z is updated, XY is not");
+			print("--> PositionList: checking for updates in X Y and Z");
+			AcTrMStage.setText("--> PositionList: checking for updates in X Y and Z");
+			
+			/* -------------------------------------------------------------------------- */
+			String jsaveFldr = saveDir+foldrPrefix+"/"+textFilesDir+"/";
+			currentState.setText("--> Checking the need to update saved positions");
+			pl = checkMotionNSave(pl, driftAssessment, nPositions, posLabel, currentState, jsaveFldr);
+			/* -------------------------------------------------------------------------- */
+		}
+		
+		String jstring = "Moving to starting position: "+posLabel[0];  
+		print("--> "+jstring+", X="+pl.getPosition(0).getX()+", Y="+pl.getPosition(0).getY()+", Z="+pl.getPosition(0).getZ());
+		currentState.setText(jstring);
+		
+		// move to first xyz position
+		MultiStagePosition.goToPosition(pl.getPosition(0), mmc); // moves the stage and focus to the x, y, and z position defined by the position liste item
+		mmc.waitForDevice(xyDevice);
+		mmc.waitForDevice(zDevice);
+		
+		
+		int timeEnd = System.currentTimeMillis();
+		// calculate time taken to go through the three nested loops
+		int tTaken = timeEnd-timeStart;
+		
+		if(tTaken > timeInterval){
+			mm.logs().showError("time point: "+IJ.d2s(itpos,0)+" requested time interval is too small. It should increased by least "+IJ.d2s(tTaken-timeInterval,0)+" ms");
+			// error();
+		} else {
+			int tsleepTime = timeInterval - tTaken;
+			
+			print("--> Sleeping for "+tsleepTime/1000+" seconds");
+			AcTrMStage.setText("--> Sleeping for "+tsleepTime/1000+" seconds");
+			sleepFunction(tsleepTime, currentState);
+		}
+	}
+	currentState.setText("--> Finished data acquisition!");
+	AcTrMStage.setText("--> Finished data acquisition!");
+}
+
+
+
+/* -------------------------------------------------------------------------------------------------------
+* A function that informs about sleep schedule
+* USAGE: sleepFunction(tsleepTime, currentState);
+*  ------------------------------------------------------------------------------------------------------ */
+sleepFunction(int tsleepTime, Alert currentState){
+	
+	ji = Math.round(tsleepTime/1000/10);
+	for(int i=1; i<ji; i++){
+		currentState.setText("--> Sleep remaining: "+Math.round(tsleepTime*(1.0-((double)i/(double)ji))/1000)+" seconds");
+		Thread.sleep(10000); // pause for the desired time pause 10 seconds at a time
+	}                       
+	Thread.sleep(tsleepTime-ji*10*1000);
+}
+
+
+
+
+/* -------------------------------------------------------------------------------------------------------
+* For resumed data, the staritng itpos will not be 1. This function gets that ITPOS
+* USAGE: get_startingITPOS(tnimgsDIR);
+*  ------------------------------------------------------------------------------------------------------ */
+int get_startingITPOS(String tnimgsDIR){
+	import ij.IJ;
+	import ij.util.Tools;
+	
+	// lool for "c0_p0_t*.tif"
+ 	int startingITPOS = 1;
+	fname = "c0_p0_t"+IJ.d2s(startingITPOS,0)+".tif";
+	//print(tnimgsDIR);
+	//print(fname);
+	File f = new File(tnimgsDIR, fname);
+	
+	while(f.exists()) {
+		startingITPOS = startingITPOS + 1;
+		fname = "c0_p0_t"+IJ.d2s(startingITPOS,0)+".tif";
+		//print(fname);
+		f = new File(tnimgsDIR, fname);
+	}
+	
+	return startingITPOS;
+}
+
+
+
+/* -------------------------------------------------------------------------------------------------------
+* Get location of min/max of an double array
+* USAGE: get_location(dbleArray, "max"); // "max" "min"
+*  ------------------------------------------------------------------------------------------------------ */
+int get_location(Double[] dbleArray, String maxMin){
+	// get minvalue of an array
+	
+	int extremeLoc = 0;
+	Double extremeVal = dbleArray[extremeLoc];
+	
+	for (int i = 1; i < dbleArray.length; i++) {
+		if((maxMin=="max")&&(dbleArray[i] > extremeVal)) {
+			extremeLoc = i;
+			extremeVal = dbleArray[extremeLoc];
+		} else if((maxMin=="min")&&(dbleArray[i] < extremeVal)) {
+			extremeLoc = i;
+			extremeVal = dbleArray[extremeLoc];
+		}
+	}
+	
+	return extremeLoc;
+}
+
+
+
+/* -------------------------------------------------------------------------------------------------------
+* From an array finds minnimum value of drift that is consistent across all positions
+* USAGE: find_drift(driftVals);
+*  ------------------------------------------------------------------------------------------------------ */
+Double find_drift(Double[] driftVals){
+	
+	Double netDrift = 0.0;
+	
+	int minLoc = get_location(driftVals, "min");
+	
+	if(driftVals[minLoc]>0){
+		netDrift = driftVals[minLoc];
+	} else if(driftVals[minLoc]<0){
+		int maxLoc = get_location(driftVals, "max"); // max negative means min for the purpose of drift
+		if(driftVals[maxLoc]<0){// all drift values are negative
+			netDrift = driftVals[maxLoc];
+		} // otherwise the drift numbers are positive and negative giving average to be zero
+	}
+	
+	return netDrift;
+}
+
+
+/* ---------------------------------------------------------------
+* Loads current positionlist and prompts for going to a desired position
+* Usage: REP_gotoPos(nPositions);
+* ------------------------------------------------------------ */
+int[] REP_gotoPos(int nPositions){
+	
+	import ij.gui.NonBlockingGenericDialog;
+	
+	// show positionlist
+	// mm.showPositionList();
+	
+	// show live view
+	/*boolean liveIsOn = mm.live().getIsLiveModeOn();
+	if(!liveIsOn){
+	mm.live().setLiveMode(true);
+	}*/
+	
+	NonBlockingGenericDialog dlgn = new NonBlockingGenericDialog("Repositioning the plate:");
+	dlgn.setLocation(600, 0);
+	dlgn.setAlwaysOnTop(true);
+	if(nPositions>2){
+		dlgn.addChoice("Select position 1: ", posLabel, posLabel[0]);
+		dlgn.addChoice("Select position 2: ", posLabel, posLabel[Math.round((nPositions-1)/2)]);
+		dlgn.addChoice("Select position 3: ", posLabel, posLabel[nPositions-1]);
+	} else if(nPositions==2){
+		dlgn.addChoice("Select position 1: ", posLabel, posLabel[0]);
+		dlgn.addChoice("Select position 2: ", posLabel, posLabel[nPositions-1]);
+	} else if(nPositions==1){
+		dlgn.addChoice("Select position 1: ", posLabel, posLabel[0]);
+	}
+	dlgn.addChoice("Select the channel that would help in repositioning: ", iChannel, iChannel[0]);			
+	dlgn.addMessage("If available, choose three well-separated points on the plate");
+	dlgn.hideCancelButton();
+	dlgn.showDialog();
+	
+	int[] REP_posChanNum = new int[4];
+	if(nPositions>2){
+		int REP_pos1 = dlgn.getNextChoiceIndex();
+		int REP_pos2 = dlgn.getNextChoiceIndex();
+		int REP_pos3 = dlgn.getNextChoiceIndex();
+		int REP_chanNum = dlgn.getNextChoiceIndex();	
+		REP_posChanNum[0] = REP_pos1; 
+		REP_posChanNum[1] = REP_pos2;
+		REP_posChanNum[2] = REP_pos3;
+		REP_posChanNum[3] = REP_chanNum;
+	} else if(nPositions==2){
+		int REP_pos1 = dlgn.getNextChoiceIndex();
+		int REP_pos2 = dlgn.getNextChoiceIndex();
+		int REP_chanNum = dlgn.getNextChoiceIndex();	
+		REP_posChanNum[0] = REP_pos1; 
+		REP_posChanNum[1] = REP_pos2;
+		REP_posChanNum[2] = REP_chanNum;
+		REP_posChanNum[3] = 0;
+	} else if(nPositions==1){
+		int REP_pos1 = dlgn.getNextChoiceIndex();
+		int REP_chanNum = dlgn.getNextChoiceIndex();	
+		REP_posChanNum[0] = REP_pos1; 
+		REP_posChanNum[1] = REP_chanNum;
+		REP_posChanNum[2] = 0;
+		REP_posChanNum[3] = 0;
+	}
+	//if(dlgn.wasOKed()){
+		/*mm.live().setLiveMode(false);*/
+	//}
+	
+	return REP_posChanNum;
+}
+
+
+/* ---------------------------------------------------------------------------------------------
+*  Continuous display of overlapped image
+*  REP_displayOverlapped(imp0, imp1);
+* ---------------------------------------------------------------------------------------------*/
+REP_displayOverlapped(ImagePlus imp0, ImagePlus imp1){
+	
+	import ij.IJ;
+	import ij.plugin.ScreenGrabber;
+	
+	//imp0 = new ImagePlus("tmp1", REP_proc0);
+	//imp1 = new ImagePlus("tmp2", proc1);
+	
+	imp0.show();
+	IJ.run("Rename...", "title=tmp1");
+	imp1.show();
+	IJ.run("Rename...", "title=tmp2");
+	
+	IJ.run("Merge Channels...", "c1=tmp1 c2=tmp2 create");
+	IJ.run("Rename...", "title=Repositioning");
+	// ImagePlus overlapIM = (new ScreenGrabber()).captureImage(); //captureImage();
+	// return overlapIM;
+}
+
+
+
+/* ---------------------------------------------------------------
+* Shows overlapped image, shows adjustment numbers, updates position list, saves position list
+* Usage: REP_repositioningError(saveDir, foldrPrefix);
+* ------------------------------------------------------------ */
+REP_repositioningError(String saveDir, String foldrPrefix, int nPositions, Double pixSz, PositionList pl, Alert AcTrMStage, Alert currentState, Alert currentTimePoint, double acceptableCorrCoeff, double xyTolerance, double zTolerance_1, double zTolerance_2, String starting_zsearch_dir){	
+	import ij.gui.NonBlockingGenericDialog;
+	import ij.IJ;
+	import ij.ImagePlus;
+	import ij.measure.Measurements; // temporary
+	import ij.text.TextWindow;
+	
+	Double REP_xi;
+	Double REP_yi;
+	Double REP_zi;
+	Double REP_x0;
+	Double REP_y0;
+	Double REP_z0;
+	Double[] xDrift = new Double[3];
+	Double[] yDrift = new Double[3];
+	Double[] zDrift = new Double[3];
+	Double[] abc_dx = new Double[3];
+	Double[] abc_dy = new Double[3];
+	Double[] abc_dz = new Double[3];
+	String jsaveFldr = saveDir+foldrPrefix+"/"+textFilesDir+"/";
+	ImagePlus overlapIM;
+	
+	// check if there are three or more positions
+	// if there are three positions only choice left is channel
+	// otherwise construct a diagram that has all positions shown on an image and get the user to choose from three dropdown menus each for one position
+	// then also have a drop down menu for channel
+	// this information is returned to REP_repositioningError
+	// using this information, go to each position (original and not updated)
+	// get the user to do correction for each position (X,Y,Z)
+	// compute dX, dY, dZ at each of the three points and from those obtain translation matrix and rotation matrix
+	// translation of the centroid of the plate is <dX>, <dY>, <dZ>
+	// rotation of the centroid of the plate is x...
+	
+	// obtain position and channel number
+	int[] REP_posChanNum = REP_gotoPos(nPositions);
+	int[] REP_pos = new int[3];
+	int REP_chanNum;
+	REP_pos[0] = REP_posChanNum[0];
+	if(nPositions==1){
+		REP_chanNum = REP_posChanNum[1];
+	} else if(nPositions==2){
+		REP_pos[1] = REP_posChanNum[1];
+		REP_chanNum = REP_posChanNum[2];
+	} else if(nPositions>2){
+		REP_pos[1] = REP_posChanNum[1];
+		REP_pos[2] = REP_posChanNum[2];
+		REP_chanNum = REP_posChanNum[3];		
+	}
+	
+	for (int i=0; i<3; i++){
+		if(nPositions==1){
+			if(i>0){break;}
+		}
+		if(nPositions==2){
+			if(i>1){break;}
+		}
+		Boolean keepShowing = true;
+		// move to next xyz position
+		MultiStagePosition.goToPosition(pl.getPosition(REP_pos[i]), mmc); // moves the stage and focus to the x, y, and z position defined by the position liste item
+		mmc.waitForDevice(xyDevice);
+		mmc.waitForDevice(zDevice);
+	
+		// set channel
+		mmc.setExposure(iExposur[REP_chanNum]);
+		mmc.waitForSystem();
+		mmc.setConfig(chanGroup, iChannel[REP_chanNum]);
+		mmc.waitForConfig(chanGroup, iChannel[REP_chanNum]);
+			
+		// AcTrMStage.setText("See below");
+		// currentState.setText("Net shift: "+IJ.d2s(xDrift,3)+", "+IJ.d2s(yDrift,3)+", "+IJ.d2s(zDrift,3));
+		
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.z(0).time(0).channel(REP_chanNum).stagePosition(REP_pos[i]);
+		Coords coords = builder.build();
+		Image refImg = store0.getImage(coords);
+		ImageProcessor refProc = mm.data().ij().createProcessor(refImg);
+		// refProc.resetRoi();	
+		// ImagePlus refImgPlus = (new ImagePlus("refImage"+IJ.d2s((double) REP_posNum,0), refProc)).duplicate();   
+		// ImageConverter iconv = new ImageConverter(refImgPlus);
+		// iconv.convertToGray32();
+		// refImgPlus.updateImage();
+	
+		// ImageProcessor refProc = ImageUtils.makeProcessor(mmc, refImg); 
+		ImagePlus refImgPlus = (new ImagePlus("refImage"+IJ.d2s((double) REP_pos[i],0),refProc)).duplicate();
+		ImageConverter iconv = new ImageConverter(refImgPlus);
+		iconv.convertToGray32();
+		refImgPlus.updateImage();
+		
+		while(keepShowing){			
+			ImagePlus imp1 = grab_ImagePlus("cur");
+			ImagePlus impTmp = refImgPlus.duplicate();
+			ImagePlus imp1Tmp = imp1.duplicate();
+			
+			REP_displayOverlapped(impTmp, imp1Tmp);
+			
+			ImagePlus impTmp = refImgPlus.duplicate();
+			ImagePlus imp1Tmp = imp1.duplicate();
+			Double REP_corrCoeff = get_DSM_corrCoeff(REP_pos[i], impTmp, imp1Tmp, true);
+			
+			NonBlockingGenericDialog dlgn = new NonBlockingGenericDialog("When satisfied, click OK!");
+			dlgn.setLocation(600, 0);
+			dlgn.setAlwaysOnTop(true);
+			dlgn.addMessage("Change XYZ so that red (reference) overlaps with green (live)",font1,Color.BLACK);
+			dlgn.addMessage("Overlap is perfect if you only see yellow and black",font2,Color.BLACK);
+			dlgn.addMessage("Percent match: "+IJ.d2s((1.0-REP_corrCoeff)*100.0,0)+"%",font2,Color.BLACK); 
+			dlgn.addMessage("NOTE: Z match will save a lot of time",font1,Color.BLACK);
+			dlgn.addMessage("NOTE: You can continue to do Z-match when AcTrM is doing XY match in the next step",font1,Color.BLACK);
+			// dlgn.addMessage("Net shift: "+IJ.d2s(xDrift,3)+", "+IJ.d2s(yDrift,3)+", "+IJ.d2s(zDrift,3),font2,Color.BLACK);
+			// dlgn.addImage(overlapIM);
+			// dlgn.hideCancelButton();
+			dlgn.setOKLabel("Accept");
+			dlgn.setCancelLabel("Refresh");
+			dlgn.showDialog();
+			if(dlgn.wasOKed()){
+				print("done");
+				IJ.run("Close", "Repositioning");
+				keepShowing = false;
+			}
+			if(dlgn.wasCanceled()){
+				IJ.run("Close", "Repositioning");
+			}
+		}
+		
+		print("--> Recovering rough xy");
+		currentState.setText("Recovering rough xy");
+		ImagePlus refIP_dup = refImgPlus.duplicate();
+		recover_xy(refIP_dup, pixSz, false, false, xyTolerance, false, REP_pos[i], currentState);
+		
+		print("--> Recovering rough z");
+		currentState.setText("Recovering rough z");
+		double startZPos = mmc.getPosition(zDevice); // pl.getPosition(REP_pos[i]).getZ();
+		mmc.waitForDevice(zDevice);
+		ImagePlus refIP_dup = refImgPlus.duplicate();
+		recover_z(refIP_dup, starting_zsearch_dir, startZPos, zTolerance_1, false, true, REP_pos[i], acceptableCorrCoeff, currentState);
+
+		currentState.setText("Recovering xy again");
+		ImagePlus refIP_dup = refImgPlus.duplicate();
+		recover_xy(refIP_dup, pixSz, false, false, xyTolerance, false, REP_pos[i], currentState);
+						
+		print("--> Recovering z again");
+		currentState.setText("Recovering z again");
+		double startZPos = mmc.getPosition(zDevice); // start where the rough recovery left off
+		mmc.waitForDevice(zDevice);
+		ImagePlus refIP_dup = refImgPlus.duplicate();
+		recover_z(refIP_dup, starting_zsearch_dir, startZPos, zTolerance_2, false, true, REP_pos[i], acceptableCorrCoeff, currentState);
+		
+		// get xyz displacements
+		// get current positions
+		REP_xi = mmc.getXPosition(xyDevice);
+		REP_yi = mmc.getYPosition(xyDevice);
+		mmc.waitForDevice(xyDevice);
+		REP_zi = mmc.getPosition(zDevice);
+		mmc.waitForDevice(zDevice);
+
+		REP_x0 = pl.getPosition(REP_pos[i]).getX();
+		REP_y0 = pl.getPosition(REP_pos[i]).getY();
+		REP_z0 = pl.getPosition(REP_pos[i]).getZ();
+		
+		xDrift[i] = REP_xi - REP_x0;
+		if(xDrift[i]==0.0){ // this avoids problems in Gauss Elimination
+			xDrift[i] = eps;
+		}
+		yDrift[i] = REP_yi - REP_y0;
+		if(yDrift[i]==0.0){ // this avoids problems in Gauss Elimination
+			yDrift[i] = eps;
+		}
+		zDrift[i] = REP_zi - REP_z0;
+		if(zDrift[i]==0.0){ // this avoids problems in Gauss Elimination
+			zDrift[i] = eps;
+		}
+	}
+	
+	if(nPositions>1){
+		if(nPositions>2){
+			Double[][] K = new Double[][]{{0.0,0.0,0.0},{0.0,0.0,0.0},{0.0,0.0,0.0}};
+			Double[] f = new Double[]{0.0,0.0,0.0};
+			Double[] u = new Double[]{0.0,0.0,0.0};
+			// update the position list
+			for (int i=0; i<3; i++){ // x, y, z
+				// assemble the coefficient of the linear system of equation
+				for (int j=0; j<3; j++){ // pos1, pos2, pos3
+					K[j][0] = pl.getPosition(REP_pos[j]).getX();
+					K[j][1] = pl.getPosition(REP_pos[j]).getY();
+					// K[j][2] = pl.getPosition(REP_pos[j]).getZ();
+					if(i==0){
+						K[j][2] = xDrift[j];
+					} else if(i==1){
+						K[j][2] = yDrift[j];
+					} else if(i==2){
+						K[j][2] = zDrift[j];
+					}
+					
+					f[j] = 1.0;
+				}
+				
+				// solve the system of equation
+				if(i==0){
+					print(K[0][0]+"  "+K[0][1]+"  "+K[0][2]);
+					print(K[1][0]+"  "+K[1][1]+"  "+K[1][2]);
+					print(K[2][0]+"  "+K[2][1]+"  "+K[2][2]);
+					print(f);
+					abc_dx = gaussElimination(K, f);
+					print(abc_dx);
+					if(abc_dx[2] == 0){
+						error("plane could not be fit through dx dy dz");
+					}
+				} else if(i==1){
+					print(K[0][0]+"  "+K[0][1]+"  "+K[0][2]);
+					print(K[1][0]+"  "+K[1][1]+"  "+K[1][2]);
+					print(K[2][0]+"  "+K[2][1]+"  "+K[2][2]);
+					print(f);
+					abc_dy = gaussElimination(K, f);
+					print(abc_dy);
+					if(abc_dy[2] == 0){
+						error("plane could not be fit through dx dy dz");
+					}
+				} else if(i==2){
+					print(K[0][0]+"  "+K[0][1]+"  "+K[0][2]);
+					print(K[1][0]+"  "+K[1][1]+"  "+K[1][2]);
+					print(K[2][0]+"  "+K[2][1]+"  "+K[2][2]);
+					print(f);
+					abc_dz = gaussElimination(K, f);
+					print(abc_dz);
+					if(abc_dz[2] == 0){
+						error("plane could not be fit through dx dy dz");
+					}
+				}
+			}
+	
+		
+			// save the coefficient for this repositioning of the plate	
+			itxt = new TextWindow("abc data", "", 500, 500);
+			String js = IJ.d2s(abc_dx[0],9) + "\t" + IJ.d2s(abc_dx[1],9)+ "\t" + IJ.d2s(abc_dx[2],9);
+			itxt.append(js);
+			js = IJ.d2s(abc_dy[0],9) + "\t" + IJ.d2s(abc_dy[1],9)+ "\t" + IJ.d2s(abc_dy[2],9);
+			itxt.append(js);
+			js = IJ.d2s(abc_dz[0],9) + "\t" + IJ.d2s(abc_dz[1],9)+ "\t" + IJ.d2s(abc_dz[2],9);
+			itxt.append(js);
+			txtPnl = itxt.getTextPanel();
+			String abcFname = getUniqueName(jsaveFldr, "abcFile.txt", false);
+			txtPnl.saveAs(jsaveFldr + abcFname);
+			itxt.close();
+	
+		
+			// calculate updated positionlist
+			for(int i=0; i < nPositions; i++){
+				iposX = pl.getPosition(i).getX() + (1.0 - abc_dx[0]*pl.getPosition(i).getX() - abc_dx[1]*pl.getPosition(i).getY())/abc_dx[2];
+				iposY = pl.getPosition(i).getY() + (1.0 - abc_dy[0]*pl.getPosition(i).getX() - abc_dy[1]*pl.getPosition(i).getY())/abc_dy[2];
+				iposZ = pl.getPosition(i).getZ() + (1.0 - abc_dz[0]*pl.getPosition(i).getX() - abc_dz[1]*pl.getPosition(i).getY())/abc_dz[2];
+				MultiStagePosition updatedPos = new MultiStagePosition(xyDevice, iposX, iposY, zDevice, iposZ);
+				updatedPos.setLabel(posLabel[i]);
+				int posIndx = pl.getPositionIndex(posLabel[i]);
+				pl.replacePosition(posIndx, updatedPos);
+			}
+		} else { // if there are two positions
+			for(int i=0; i<2; i++){
+				iposX = pl.getPosition(i).getX() + xDrift[i];
+				iposY = pl.getPosition(i).getY() + yDrift[i];
+				iposZ = pl.getPosition(i).getZ() + zDrift[i];
+				
+				MultiStagePosition updatedPos = new MultiStagePosition(xyDevice, iposX, iposY, zDevice, iposZ);
+				updatedPos.setLabel(posLabel[i]);
+				int posIndx = pl.getPositionIndex(posLabel[i]);
+				pl.replacePosition(posIndx, updatedPos);
+			}
+		}
+	} else { // if there is only one position
+		//for(int i=0; i<1; i++){
+		int i = 0;
+		iposX = pl.getPosition(i).getX() + xDrift[i];
+		iposY = pl.getPosition(i).getY() + yDrift[i];
+		iposZ = pl.getPosition(i).getZ() + zDrift[i];
+		 
+		MultiStagePosition updatedPos = new MultiStagePosition(xyDevice, iposX, iposY, zDevice, iposZ);
+		updatedPos.setLabel(posLabel[i]);
+		int posIndx = pl.getPositionIndex(posLabel[i]);
+		pl.replacePosition(posIndx, updatedPos);
+		//}
+	}
+	// currentState.setText("Saving adjusted position file in "+jsaveFldr);
+	print("Saving adjusted position file in "+jsaveFldr);
+	positionListFileSave(pl, jsaveFldr);
+	IJ.beep();
+}
+
+
+
+
+// solving linear system of equations
+Double[] gaussElimination(Double[][] K, Double[] f) {
+
+    int npts = f.length;
+    
+    for (int i=0; i<npts; i++){
+    	int maxPos = i;
+    	for (int j=i+1; j<npts; j++){
+    		if(Math.abs(K[j][i])>Math.abs(K[maxPos][i])){
+    			maxPos = j;
+    		}
+    	}
+    	Double[] jr = K[i]; 
+    	K[i] = K[maxPos];
+    	K[maxPos] = jr;
+    	Double fjr = f[i];
+    	f[i] = f[maxPos];
+    	f[maxPos] = fjr;
+    	
+    	if(Math.abs(K[i][i]) <= eps){
+    		error("Gauss Elimination: Dealing with a nearly singular matrix");
+    	}
+    	
+    	for(int j=i+1;j<npts;j++){
+    		Double jr = K[j][i]/K[i][i];
+    		f[j] -= jr*f[i];
+    		for (int l=i; l<npts; l++){
+    			K[j][l] -= jr*K[i][l];
+    		}
+    	}
+    }
+
+    // back substitution
+	Double[] u = new Double[npts];
+	for (int i=npts-1; i>=0; i--){
+		Double jr = 0.0;
+		for (int j=i+1; j<npts; j++){
+			jr += K[i][j] * u[j];
+		}
+		u[i] = (f[i]-jr)/K[i][i];
+	}
+	
+	return u;
+}
+
+
+

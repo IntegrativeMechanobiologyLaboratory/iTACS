@@ -1,0 +1,347 @@
+// 
+// Important notes:
+// 1. Images stored on harddrive are rotated back CCW 90. Such rotation is done to get the ref images match with current images 
+// 2. xy-recovery is based on bottom bead images
+// 3. Z recoery is based on bottom bead images (default) and then top bead images (if specifically mentioned).
+// 4. If you want to save a position list and load that specific position lsit (and not the latest _2 or _100), then save that position list in a separate folder with nothing else there. This will load the desired position list.
+// 5. Error in z is compared at over eight or more sequential trials 
+// 6. The image acquisition works only for square images, reason: FHT
+//
+
+import org.micromanager.api.AcquisitionOptions;
+import java.lang.System;
+import org.micromanager.internal.MMStudio;
+import org.micromanager.PositionList; // https://valelab4.ucsf.edu/~MM/doc-2.0.0-gamma/mmstudio/org/micromanager/PositionList.html
+import org.micromanager.PositionListManager; 
+import org.micromanager.MultiStagePosition; // https://valelab4.ucsf.edu/~MM/doc-2.0.0-gamma/mmstudio/org/micromanager/MultiStagePosition.html
+import org.micromanager.StagePosition;
+import org.micromanager.acquisition.SequenceSettings; // https://valelab4.ucsf.edu/~MM/doc-2.0.0-gamma/mmstudio/org/micromanager/SequenceSettings.html
+import org.micromanager.display.DisplayWindow; // for adjustZoom
+// import org.micromanager.display.internal.DefaultDisplayManager; //closealldisplaywindows
+
+import java.util.List;
+import org.micromanager.data.Coords;  // https://micro-manager.org/wiki/Using_Builders 
+import org.micromanager.data.Coords.Builder; // https://valelab4.ucsf.edu/~MM/doc-2.0.0-gamma/mmstudio/org/micromanager/data/Coords.Builder.html
+import org.micromanager.data.Datastore;
+import org.micromanager.data.Image;
+import org.micromanager.data.Metadata;
+import org.micromanager.data.Metadata.MetadataBuilder; // https://sourceforge.net/p/micro-manager/mailman/message/36130466/
+
+// need to use these to directions
+import ij.gui.NonBlockingGenericDialog;
+import ij.gui.WaitForUserDialog;
+import ij.IJ; // for d2s(double, int);
+import ij.io.FileSaver;
+import ij.io.DirectoryChooser; // for directory choosing dialog
+import ij.ImagePlus;
+import ij.process.*;
+
+// following needed to do recovery of xy and z
+import mmcorej.CMMCore;
+import org.micromanager.utils.ImageUtils; 
+import org.micromanager.internal.utils.ImageUtils;
+
+// for messages
+import org.micromanager.internal.utils.ReportingUtils;
+import org.micromanager.alerts.Alert;
+
+// to get double from string
+import ij.util.Tools;
+
+/* ---------------------------------------------------------------------------------------------------
+* Beanshell functions
+* --------------------------------------------------------------------------------------------------- */
+// String functionDir = "C:/Users/IMBL_admin/Documents/MicroscopeFiles/microManager/AcTrM";
+// this.interpreter.source(functionDir+"/AcTrM_functions.bsh");
+this.interpreter.source("../plugins/IMBL/AcTrM_functions.bsh");
+
+mm.displays().closeAllDisplayWindows(true); // - Method in interface org.micromanager.display.DisplayManager
+
+
+/* ---------------------------------------------------------------------------------------------------
+* define filenames
+* --------------------------------------------------------------------------------------------------- */
+String textFilesDir = "textFiles"; // saves following text files, this directory is located with the directory identified by prefix
+String t0ImgFoldr = "t0imgs"; // stores all the images acquired at t=0
+String tnImgFoldr = "tnimgs"; // stores all the images acquired at time other than t=0
+String settingsFname = "AcqSettings.txt";
+String postionListFname = "PosList.pos";
+String userOptionsFname = "userOptions.txt";
+String resultsFname = "xyDrift_corrCoeff.txt";
+String[] startupOptions = new String[] {"Fresh acquisition", "Continue a paused acquisition"};
+String[] roiType = new String[] {"Full field", "Reduced field"};
+
+boolean liveIsOn; // to help turn off live as acquistion will not occur if live is on
+boolean newAcquisition = false;
+boolean showDriftOverlapped = true;
+boolean showXCorrMap = true;
+String starting_zsearch_dir = "up";
+Double eps = 1e-10;
+
+/* ---------------------------------------------------------------------------------------------------
+* Alerts
+* --------------------------------------------------------------------------------------------------- */
+Alert AcTrMStage = mm.alerts().postUpdatableAlert("AcTrM Stage", "");
+Alert currentState = mm.alerts().postUpdatableAlert("Current State", "");
+Alert dataLocation = mm.alerts().postUpdatableAlert("Data Location", "");
+Alert currentTimePoint = mm.alerts().postUpdatableAlert("Current Time Point", "");
+
+
+/* ---------------------------------------------------------------------------------------------------
+* get hardware properties
+* --------------------------------------------------------------------------------------------------- */
+String[] xyzhardwr = get_hardware_props();
+String xyDevice = xyzhardwr[0];
+String zDevice = xyzhardwr[1];
+Double pixSz = (Double) Tools.parseDouble(xyzhardwr[2]); // 0.6507028; //10.0/12.0;
+double xyTolerance = (double) Tools.parseDouble(xyzhardwr[3]); // 0.5;
+double zTolerance_1 = (double) Tools.parseDouble(xyzhardwr[4]); // 2;
+double zTolerance_2 = (double) Tools.parseDouble(xyzhardwr[5]); // 0.2;
+double acceptableCorrCoeff = (double) Tools.parseDouble(xyzhardwr[6]); // 0.01;
+print("xyDevice="+xyDevice);
+print("zDevice="+zDevice);
+print("pixSz="+IJ.d2s(pixSz,7));
+print("xyTolerance="+IJ.d2s(xyTolerance,2));
+print("zTolerance_1="+IJ.d2s(zTolerance_1,0));
+print("zTolerance_2="+IJ.d2s(zTolerance_2,1));
+print("acceptableCorrCoeff="+IJ.d2s(acceptableCorrCoeff,3));
+
+
+/* ---------------------------------------------------------------------------------------------------
+* get user input on the type of startup
+* --------------------------------------------------------------------------------------------------- */
+userChoiceIndx = define_startup_settings(startupOptions);
+// Boolean topBeadZ = define_secondZrecovery_settings(); // implement this flag in the acquire_t0 function
+if(userChoiceIndx==0){
+	newAcquisition = true;
+}
+String userChoices = "Startup: "+startupOptions[userChoiceIndx];
+
+
+/* ---------------------------------------------------------------------------------------------------
+* get the position list and MDA settings from the wizards, user is expected to fill these wizards
+* --------------------------------------------------------------------------------------------------- */
+String saveDir;
+String foldrPrefix;
+
+PositionList pl = new PositionList();
+SequenceSettings settings = new SequenceSettings();
+
+if(newAcquisition){ // start new acquisition (not resumption of last session)
+	Boolean doThis = create_position_list();
+	if(!doThis){
+		mm.logs().showError("You did not finish creating position list, we will start fromt he beginning");
+	} else {
+		liveIsOn = mm.live().getIsLiveModeOn();
+		if(liveIsOn){
+			mm.live().setLiveMode(false);
+		}
+		// mm.live().setSuspended(true);
+		// ...perform some action...
+		// mm.live().setSuspended(false);
+	}
+	
+	// read the position list
+	// pl = mm.getPositionList(); // replaced by following on Dec 13, 2018
+	
+	pl = mm.positions().getPositionList();
+	if (pl == null) {
+		mm.scripter().message("No Positionlist found");
+		exit;
+	}
+	if (pl.getNumberOfPositions() < 1) {
+		mm.scripter().message("PositionList is empty");
+		exit;
+	}
+	
+	
+	
+	
+	
+	define_MDA_settings();
+	
+	// read the MDA settings
+	settings = mm.acquisitions().getAcquisitionSettings();
+	
+	/* -----------------------------------------------------------------------------
+	* Handling directories and hard drive storage
+	* ----------------------------------------------------------------------------- */
+	saveDir = settings.root;
+	foldrPrefix = settings.prefix;
+	
+	// make sure that saveDir ends with a  "/" if not add it
+	saveDir = switchSlash_and_endWithOne(saveDir);
+	settings.root = saveDir;
+	// print("saveDir = "+saveDir);
+	// currentState.setText("saveDir = "+saveDir);
+	
+	
+	// get a unique name for prefix
+	settings.prefix = make_dir(saveDir, foldrPrefix, true, false);
+	foldrPrefix = settings.prefix;
+	mm.acquisitions().setAcquisitionSettings(settings);
+	
+} else {  // resume from an old run
+	
+	liveIsOn = mm.live().getIsLiveModeOn();
+	if(liveIsOn){
+		mm.live().setLiveMode(false);
+	}
+	
+	DirectoryChooser usrDirInput = new DirectoryChooser("To resume the experiment, choose the directory that contains the three data folders");
+	String saveDir_foldrPrefix = usrDirInput.getDirectory(); 
+	
+	// load MDA settings
+	mm.acquisitions().loadAcquisition(saveDir_foldrPrefix+"/"+textFilesDir+"/"+settingsFname);
+	
+	// read the MDA settings
+	settings = mm.acquisitions().getAcquisitionSettings();
+	
+	saveDir = settings.root;
+	foldrPrefix = settings.prefix;
+	
+	// load positionlist
+	pl = positionListFileRead(saveDir_foldrPrefix+"/"+textFilesDir, postionListFname, false); // get the last one
+	
+	// read the position list
+	// pl = mm.getPositionList();
+}
+
+
+int nPositions = pl.getNumberOfPositions();
+print("There are "+nPositions+" positions");
+currentState.setText("There are "+nPositions+" positions");
+if(nPositions==0){
+	mm.logs().showError("No positions provided, cannot acquire images!");
+}
+print("foldrPrefix = "+foldrPrefix);
+currentState.setText("foldrPrefix = "+foldrPrefix);
+
+if(newAcquisition){ // start new session (not resumption of an old session)
+	// make the directory for images acquired at t=0
+	make_dir(saveDir+foldrPrefix, t0ImgFoldr, true, true);
+	
+	// make the directory for images acquired at t=0
+	make_dir(saveDir+foldrPrefix, tnImgFoldr, true, true);
+	
+	// make the directory that will store all the text files
+	make_dir(saveDir+foldrPrefix, textFilesDir, true, true);
+}
+
+
+/* ---------------------------------------------------------------------------------------------------
+* save settings and position list in a separate files on the hard drive
+* --------------------------------------------------------------------------------------------------- */
+// save positionlist to the first position list file
+// save positionlist file with the unique name, update coordinates are saved in _1 _2 _3 file
+jsaveFl = saveDir+foldrPrefix+"/"+textFilesDir+"/"+postionListFname;
+pl.save(jsaveFl);
+
+// save the acquisition settings to a file
+jsaveFl = saveDir+foldrPrefix+"/"+textFilesDir+"/"+settingsFname;
+mm.acquisitions().saveSequenceSettings(settings, jsaveFl); //          Save the provided SequenceSettings object to disk at the specified path.
+
+
+
+/* ---------------------------------------------------------------------------------------------------
+* Make convenient variables for the acquisition settings and position list
+* --------------------------------------------------------------------------------------------------- */
+MultiStagePosition[] positions = pl.getPositions();
+
+String[] posLabel = new String[nPositions];
+for (int i=0; i<nPositions; i++) {
+	posLabel[i] = pl.getPosition(i).getLabel();
+}
+
+String chanGroup = settings.channelGroup;
+int nChannels = settings.channels.size();
+String[] iChannel = new String[nChannels];
+Color[] iColor = new Color[nChannels];
+// channelGroup = "Channel";
+Double[] iExposur = new Double[nChannels];
+int[] iSkipFact = new int[nChannels];
+Double[] iZoffset = new Double[nChannels];
+
+for (int i=0; i<nChannels; i++){
+	//	if(settings.channels.get(i).useChannel)
+	iChannel[i] = settings.channels.get(i).config;
+	iExposur[i] = settings.channels.get(i).exposure;
+	iColor[i] = settings.channels.get(i).color;
+	iZoffset[i] = settings.channels.get(i).zOffset;
+	iSkipFact[i] = settings.channels.get(i).skipFactorFrame;
+}
+
+int nframes = settings.numFrames;
+ArrayList nSlices = settings.slices;
+String chanComment = settings.comment;
+Double timeInterval = settings.intervalMs;
+boolean saveAsImageFlag = settings.save;
+
+dataLocation.setText(saveDir+foldrPrefix);
+currentTimePoint.setText("0 of "+IJ.d2s(nframes,0));
+
+
+
+int[] recoveryFlags_other = new int[] {0, 0, 0}; 
+int[][] recoveryFlags = new int[nPositions][2];
+int[][] recoveryChannel = new int[nPositions][2];
+int[][] recoveryRegion = new int[nPositions][4]; // for refined recovery, note rough recovery is done using wholefield image
+double[][] xyDrift_zCorrCoeff = new double[nPositions][3]; // 
+// right now all locations have same recoveryFlag, and recoveryChannel settings. 
+
+String txtPath = saveDir+foldrPrefix+"/"+textFilesDir; // only for images at t=0
+if(newAcquisition){
+	recoveryInput(iChannel, txtPath);
+} else {
+	read_rrr(txtPath);	// read the recovery options
+}	
+
+if(recoveryFlags_other[0]==0){
+starting_zsearch_dir = "down";}	
+
+if(recoveryFlags_other[1]==0){
+showDriftOverlapped = false;}
+
+if(recoveryFlags_other[2]==0){
+showXCorrMap = false;}
+
+
+
+
+/* ---------------------------------------------------------------------------------------------------
+* create RAM datastore for the t=0 images
+* --------------------------------------------------------------------------------------------------- */
+int startingITPOS = 1;
+String t0Path = saveDir+foldrPrefix+"/"+t0ImgFoldr; // only for images at t=0
+Datastore store0 = mm.data().createRAMDatastore();
+if(newAcquisition){ //  "Acquire new"
+	// CAUTION see if this creates a second instance of a Datastore or whether this is same datastore
+	AcTrMStage.setText("Acquiring and storing T0 data");
+	currentState.setText("Acquiring and storing T0 data");
+	store0 = t0Images_acquireNStore(t0Path, pl, chanGroup, iChannel, nPositions, nChannels, iExposur, posLabel, timeInterval, currentState, AcTrMStage);
+	
+} else { // "Resume from old"
+	// replace this by resuming program
+	AcTrMStage.setText("Loading T0 data");
+	currentState.setText("Loading T0 data");
+	
+	store0 = t0Images_loadNshow(t0Path);
+	
+	startingITPOS = get_startingITPOS(saveDir+foldrPrefix+"/"+tnImgFoldr);
+	
+	print("Starting time position="+IJ.d2s(startingITPOS,0));
+	currentState.setText("Starting time position="+IJ.d2s(startingITPOS,0));
+	
+	// Check if position adjustment is needed
+	REP_repositioningError(saveDir, foldrPrefix, nPositions, pixSz, pl, AcTrMStage, currentState, currentTimePoint, acceptableCorrCoeff, xyTolerance, zTolerance_1, zTolerance_2, starting_zsearch_dir);
+
+	// REP_loopedOverlapped(saveDir, foldrPrefix, AcTrMStage, currentState);
+}
+
+/* ---------------------------------------------------------------------------------------------------
+* Proceed with regular image acquisition
+* --------------------------------------------------------------------------------------------------- */
+AcTrMStage.setText("Acquiring MSM data");
+currentState.setText("Acquiring MSM data");                                                                                                                       
+acquireData(startingITPOS, pixSz, saveDir, foldrPrefix, tnImgFoldr, store0, pl, posLabel, chanGroup, nframes, nPositions, nChannels, iExposur, iChannel, timeInterval, AcTrMStage, currentState, currentTimePoint, acceptableCorrCoeff, xyTolerance, zTolerance_1, zTolerance_2, showDriftOverlapped, showXCorrMap, starting_zsearch_dir);
+
