@@ -17,3 +17,4 @@ Module of iTACS designed to automate analysis and visualization of mechanical an
 * Keep the Matlab functions in the /opt/MATLAB/R2017a/toolboxes/matlab/traction/
   * These functions will be released soon 
 * FORTRAN executables need to be kept in /opt/MSM/
+* Install gfortran `sudo apt-get install gfortran`
