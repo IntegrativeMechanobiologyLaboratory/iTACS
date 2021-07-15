@@ -9,7 +9,7 @@ Module of iTACS designed to automate analysis and visualization of mechanical an
 * Install `Fiji` (https://imagej.net/software/fiji/)
 * Need imagej 52o onwards otherwise the nonblocking dialog will not work
 * In the Fiji update sites include following: `BIG-EPFL`, `BioVoxxel`, `ParallelFFTJ`, `Radial profile`
-* For PIV, click in Fiji: `Menu` > `Help` > `Update`... Then click `Manage update sites` > `Add update site` and add the URL: https://sites.imagej.net/iterativePIV
+* For PIV, click in Fiji: `Menu` > `Help` > `Update...`. Then click `Manage update sites` > `Add update site` and add the URL: https://sites.imagej.net/iterativePIV
 * For technical details on these plugins, see:
   * `ParallelFFTJ` - https://sites.google.com/site/piotrwendykier/software/parallelfftj
   * `Radial Profile` - https://imagej.nih.gov/ij/plugins/radial-profile.html
