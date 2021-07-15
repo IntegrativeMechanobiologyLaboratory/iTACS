@@ -1,1 +1,1 @@
-Make sure the gfortran is installed on the computer `sudo apt-get install gfortran`
+Make sure the gfortran is installed on the computer `sudo apt install gfortran`
