@@ -14,7 +14,7 @@ Module of iTACS designed to automate analysis and visualization of mechanical an
   * `ParallelFFTJ` - https://sites.google.com/site/piotrwendykier/software/parallelfftj
   * `Radial Profile` - https://imagej.nih.gov/ij/plugins/radial-profile.html
   * `ImageJ PIV` - https://sites.google.com/site/qingzongtseng/piv
-* Keep the MATLAB functions in the `/opt/iTACS/traction/`
+* Keep the MATLAB functions in the `/opt/iTACS/FTTM/`
   * These functions will be released soon 
 * FORTRAN executables need to be kept in `/opt/iTACS/MSM/`
 * Install gfortran `sudo apt install gfortran`
