@@ -4,5 +4,5 @@ Need guidance to implement iTACS on your microscope? We will be glad to help: dt
 
 Here is an overview of an iTACS-based experiment to examine physiological properties of individual adherent cells:
 
-![iTACS process overview](https://user-images.githubusercontent.com/46034811/140856020-483d5196-7338-4418-b5b7-6d8b51ad6feb.png)
+![iTACS process overview](https://user-images.githubusercontent.com/46034811/140856380-4b7b8a27-f6df-4979-9949-197b3c4e3777.png)
 
