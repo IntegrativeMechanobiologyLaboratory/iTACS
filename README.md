@@ -40,6 +40,6 @@ AcTrM is developed and tested on [Micro-Manager-2.0beta](https://valelab4.ucsf.e
 
 * Create a folder `tnimgs` in a suitable directory. Ensure that the path of this directory does not have space in the names of any of the parent folders.
 * Copy all the `c*_p*_t*.tif` files from [GitHub](https://github.com/IntegrativeMechanobiologyLaboratory/iTACS/tree/main/demo/tnimgs) into the `tnimgs` folder.
-* From Fiji, use `MSM` > `MSM - pre-processing` to start data analysis and follow the procedure described in the manuscript.
+* From Fiji, use `MSM` > `MSM - pre-processing` to start data analysis and follow the procedure described in the Nguyen, Battle, Paudel *et al.*, manuscript.
   ![front](https://user-images.githubusercontent.com/46034811/141379114-b5949217-93be-45fb-a5d1-767e1132cb45.png)
   
