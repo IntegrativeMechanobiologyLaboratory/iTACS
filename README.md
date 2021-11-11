@@ -14,6 +14,7 @@ Current version is developed and tested on Ubuntu operating system (18.04 - 20.1
 
 | Task                                                         | Links                                                        |
 | ------------------------------------------------------------ | ------------------------------------------------------------ |
+| Install gfortran using `sudo apt install gfortran`           |                                                              |
 | In the root folder, create a directory `/opt/`               |                                                              |
 | Install Fiji in `/opt/Fiji.app/`                             | https://imagej.net/software/fiji/downloads                   |
 | Save a copy of `Radial_Profile.java` in the `plugins` folder of Fiji | https://imagej.nih.gov/ij/plugins/radial-profile.html        |
