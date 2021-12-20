@@ -5117,7 +5117,7 @@ function calculateTraction(){
 				if(!File.exists(out_flname)){
 					js = posDir+dispDir+tracLabel+"_disp.dat";
 					if(File.exists(js)){
-						exec("xterm", "-e", "cd "+posDir+"  && matlab -nodisplay -r tractionCalc"); 
+						exec("xterm", "-e", "cd "+posDir+"  && matlab -nodisplay -r \"addpath(\'/opt/iTACS/FTTM/\'); tractionCalc(\'"+posDir+"\')\"");
 					} else {
 						exit("Run gel deformation function \nFile: "+js+" is absent");
 					}
