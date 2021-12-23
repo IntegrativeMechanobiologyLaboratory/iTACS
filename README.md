@@ -1,6 +1,6 @@
 # iTACS overview
 
-Need guidance to implement iTACS on your microscope? We will be glad to help: dtambe@southalabama.edu
+Need guidance to implement iTACS on your microscope or looking for collaboration? We will be glad to hear from you: dtambe@southalabama.edu
 
 Here is an overview of an iTACS-based experiment to examine physiological properties of individual adherent cells:
 
