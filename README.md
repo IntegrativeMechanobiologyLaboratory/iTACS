@@ -43,4 +43,8 @@ AcTrM is developed and tested on [Micro-Manager-2.0beta](https://valelab4.ucsf.e
 * Copy all the `c*_p*_t*.tif` files from [GitHub](https://github.com/IntegrativeMechanobiologyLaboratory/iTACS/tree/main/demo/tnimgs) into the `tnimgs` folder.
 * From Fiji, use `MSM` > `MSM - pre-processing` to start data analysis and follow the procedure described in the Nguyen, Battle, Paudel *et al.*, manuscript.<br />
   ![front](https://user-images.githubusercontent.com/46034811/141379114-b5949217-93be-45fb-a5d1-767e1132cb45.png)
-  
+
+# JoVE article
+
+# Demo Video
+[![Demo video from JoVE article]({image-url})]({https://www.jove.com/embed/player?id=63095} "from JoVE article")
