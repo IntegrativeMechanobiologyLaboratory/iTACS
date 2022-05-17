@@ -1,6 +1,6 @@
 # iTACS overview
 
-For a detailed protocol, please refer to [Nguyen et. al., Jove (2022)](https://www.jove.com/video/63095)
+For a detailed protocol, please refer to [Nguyen et. al., **JoVE 181**, e63095 (2022)](https://www.jove.com/video/63095)
 
 Need guidance to implement iTACS on your microscope or looking for collaboration? <br>
 We will be glad to hear from you: dtambe@southalabama.edu<br><br>
