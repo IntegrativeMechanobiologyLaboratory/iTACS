@@ -50,4 +50,7 @@ AcTrM is developed and tested on [Micro-Manager-2.0beta](https://valelab4.ucsf.e
 Nguyen, A., Battle, K.C., Paudel S.S., et al. *Integrative Toolkit to Analyze Cellular Signals: Forces, Motion, Morphology, and Fluorescence.* **J. Vis. Exp.** 181, e63095 (2022).<br>
 [PDF](https://www.jove.com/pdf/63095/jove-protocol-63095-integrative-toolkit-to-analyze-cellular-signals-forces-motion.pdf)&nbsp;&nbsp;
 [HTML](https://www.jove.com/t/63095/integrative-toolkit-to-analyze-cellular-signals-forces-motion)<br>
+
+**Accompanying JoVE Video**<br>
 [![JoVE video](https://cloudfront.jove.com/CDNSource/teasers/63095.jpg)](https://www.jove.com/embed/player?id=63095)
+
