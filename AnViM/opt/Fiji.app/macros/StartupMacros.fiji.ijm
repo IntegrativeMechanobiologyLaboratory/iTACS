@@ -1198,14 +1198,14 @@ function individualCellSegmentation(){
 			if(!File.exists(workDir+nestedFolder+resultsDir+replace(files[ifile],"_areaStat.txt",".csv"))){
 				open(workDir+nestedFolder+replace(files[ifile],"_areaStat.txt",".tif"));
 				run("8-bit");
-				run("Pseudo flat field correction", "blurring=50");
+				if(blurSize!=0) run("Pseudo flat field correction", "blurring=50"); // March 07 2023
 				selectWindow(replace(files[ifile],"_areaStat.txt",".tif"));
 				if(inversionFlag==1) run("Invert");
 				setVoxelSize(1, 1, 1, "pixel");
 				run("Enhance Local Contrast (CLAHE)", "blocksize=127 histogram=256 maximum=3 mask=*None* fast_(less_accurate)");
-				run("Gaussian Blur...", "sigma="+d2s(blurSize,0));
+				if(blurSize!=0) run("Gaussian Blur...", "sigma="+d2s(blurSize,0)); // March 07 2023
 				run("Invert");
-				run("Bandpass Filter...", "filter_large=100 filter_small=0 suppress=None tolerance=5 autoscale saturate");
+				if(blurSize!=0) run("Bandpass Filter...", "filter_large=100 filter_small=0 suppress=None tolerance=5 autoscale saturate");  // March 07 2023
 				run("Enhance Local Contrast (CLAHE)", "blocksize=127 histogram=256 maximum=3 mask=*None* fast_(less_accurate)");
 				rename("phase");
 		
@@ -1213,12 +1213,12 @@ function individualCellSegmentation(){
 				
 				open(workDir+nestedFolder+replace(files[ifile],"_areaStat.txt",".tif"));
 				run("8-bit");
-				run("Pseudo flat field correction", "blurring=50");
+				if(blurSize!=0) run("Pseudo flat field correction", "blurring=50"); // March 07 2023
 				selectWindow(replace(files[ifile],"_areaStat.txt",".tif"));
 				if(inversionFlag==1) run("Invert");
 				setVoxelSize(1, 1, 1, "pixel");
 				run("Enhance Local Contrast (CLAHE)", "blocksize=127 histogram=256 maximum=3 mask=*None* fast_(less_accurate)");
-				run("Gaussian Blur...", "sigma="+d2s(blurSize,0));
+				if(blurSize!=0) run("Gaussian Blur...", "sigma="+d2s(blurSize,0)); // March 07 2023
 				run("Invert");
 				run("Maximum...", "radius="+d2s(segmentationRadius,0));
 				rename("max");
@@ -1233,10 +1233,20 @@ function individualCellSegmentation(){
 				run("8-bit");
 				setVoxelSize(1, 1, 1, "pixel");
 				run("Invert"); // make cells black (255)
-				run("EDM Binary Operations", "iterations=10 operation=dilate");
-				run("EDM Binary Operations", "iterations=10 operation=erode");
+				if(blurSize!=0){
+					run("EDM Binary Operations", "iterations=10 operation=dilate"); // March 07 2023
+				} else {
+					run("EDM Binary Operations", "iterations=2 operation=dilate"); // March 07 2023
+				}
+				if(blurSize!=0) {
+					run("EDM Binary Operations", "iterations=10 operation=erode"); // March 07 2023
+				} else {
+					run("EDM Binary Operations", "iterations=2 operation=erode"); // March 07 2023
+				}
+				
 				rename("mask");
-
+				riimba(dirtSize, "mask");
+				roomba(dirtSize, "mask", false, "");
 				run("Invert");
 				selectWindow("mask");
 				run("Select All");
@@ -1288,12 +1298,13 @@ function individualCellSegmentation(){
 				run("Multiply...", "value=255");
 				run("Make Binary");
 				run("Invert");
+				roomba(dirtSize, "segmentedIm", false, "");
 		
 				run("Divide...", "value=255");
 				
 				open(workDir+nestedFolder+replace(files[ifile],"_areaStat.txt",".tif"));
 				run("8-bit");
-				run("Pseudo flat field correction", "blurring=50");
+				if(blurSize!=0) run("Pseudo flat field correction", "blurring=50");  // March 07 2023
 				selectWindow(replace(files[ifile],"_areaStat.txt",".tif"));
 				setVoxelSize(1, 1, 1, "pixel");
 				rename("origFile");
@@ -1344,7 +1355,7 @@ function individualCellSegmentation(){
 				
 				run("Close All");
 			} else {
-				print("To recalculate, delete the file: "+workDir+nestedFolder+resultsDir+replace(files[ifile],"_areaStat.txt",".csv"));
+				print("--->  To recalculate, delete the file: "+workDir+nestedFolder+resultsDir+files[ifile]+"_*.csv, _*.tif, _statistics.*");
 			}
 		} //STOP
 	}
