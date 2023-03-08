@@ -56,5 +56,5 @@ Nguyen, A., Battle, K.C., Paudel S.S., et al. *Integrative Toolkit to Analyze Ce
 
 # Notes
 To segment smooth muscle cells that are separated and have long and narrow extensions, 
-(1) do cluster segmentation by thresholding to have white cells (pixel value 255) and black background (pixel value 0). 
-(2) for individual segmentation, start with parameter values: sledgehammer = 0, proninance = 100, mallet = 40
+  (1) do cluster segmentation by thresholding to have white cells (pixel value 255) and black background (pixel value 0). 
+  (2) for individual segmentation, start with parameter values: sledgehammer = 0, proninance = 100, mallet = 40
